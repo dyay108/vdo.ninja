@@ -51,7 +51,7 @@
 		overflow-y: auto;
 	}
 
-	.outMessage, .inMessage {
+	.outMessage, .inMessage, .tipMessage {
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
@@ -68,6 +68,15 @@
 	.inMessage {
 		color: var(--discord-text);
 		background-color: var(--discord-grey-7);
+	}
+
+	.tipMessage {
+		background: linear-gradient(135deg, #ffd700 0%, #ffb700 100%);
+		color: #1a1a1a;
+		text-align: center;
+		justify-content: center;
+		font-weight: 500;
+		border: 1px solid #e6a800;
 	}
 
 	.outMessage .chat_message {
@@ -509,26 +518,26 @@ function updateMessages(message = false){
 		////// KEEP THIS IN /////////
 		//console.log(message.msg); // Display Recieved messages for View-Only clients.
 		/////////////////////////////
-		var label = "";
-		if (message.label){
-			label = sanitize(decodeHTML(message.label));
-		} 
-		var labelPrefix = label ? label + " " : "";
+		var label = message.label ? decodeHTML(message.label) : "";
+		var labelText = sanitize(label);
 		var safeMessage = replaceURLs(message.msg);
 		var safeTime = sanitize(time);
 
 		if (message.type == "sent"){
-			msg.innerHTML = "<span class='chat_message chat_sent'>"+safeMessage + "  </span><i><small> <small>- "+safeTime+"</small></small></i><span style='display:none'>"+label+"</span>";
+			msg.innerHTML = "<span class='chat_message chat_sent'>"+safeMessage + "  </span><i><small> <small>- "+safeTime+"</small></small></i><span style='display:none'>"+labelText+"</span>";
 			msg.classList.add("outMessage");
 		} else if (message.type == "recv"){
-			msg.innerHTML = labelPrefix+"<span class='chat_message chat_recv'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+			msg.innerHTML = label+"<span class='chat_message chat_recv'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 			msg.classList.add("inMessage");
 		} else if (message.type == "action"){
-			msg.innerHTML = labelPrefix+"<span class='chat_message chat_action'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+			msg.innerHTML = label+"<span class='chat_message chat_action'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 			msg.classList.add("actionMessage");
 		} else if (message.type == "alert"){
 			msg.innerHTML = "<span class='chat_message chat_alert'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 			msg.classList.add("inMessage");
+		} else if (message.type == "tip"){
+			msg.innerHTML = "<span class='chat_message chat_tip'>"+safeMessage + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+			msg.classList.add("tipMessage");
 		} else {
 			msg.innerHTML = "<span class='chat_message chat_other'>"+safeMessage + "  </span><i><small> <small>- "+safeTime+"</small></small></i>";
 			msg.classList.add("inMessage");
@@ -542,27 +551,27 @@ function updateMessages(message = false){
 			////// KEEP THIS IN /////////
 			//console.log(messageList[i].msg); // Display Recieved messages for View-Only clients.
 			/////////////////////////////
-			var label = "";
-			if (messageList[i].label){
-				label = sanitize(decodeHTML(messageList[i].label));
-			} 
+			var label = messageList[i].label ? decodeHTML(messageList[i].label) : "";
+			var labelText = sanitize(label);
 			
 			var message = replaceURLs(messageList[i].msg);
-			var labelPrefix = label ? label + " " : "";
 			var safeTime = sanitize(time);
 			
 			if (messageList[i].type == "sent"){
-				msg.innerHTML = "<span class='chat_message chat_sent'>"+message + "  </span><i><small> <small>- "+safeTime+"</small></small></i><span style='display:none'>"+label+"</span>";
+				msg.innerHTML = "<span class='chat_message chat_sent'>"+message + "  </span><i><small> <small>- "+safeTime+"</small></small></i><span style='display:none'>"+labelText+"</span>";
 				msg.classList.add("outMessage");
 			} else if (messageList[i].type == "recv"){
-				msg.innerHTML = labelPrefix+"<span class='chat_message chat_recv'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+				msg.innerHTML = label+"<span class='chat_message chat_recv'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 				msg.classList.add("inMessage");
 			} else if (messageList[i].type == "action"){
-				msg.innerHTML = labelPrefix+"<span class='chat_message chat_action'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+				msg.innerHTML = label+"<span class='chat_message chat_action'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 				msg.classList.add("actionMessage");
 			} else if (messageList[i].type == "alert"){
 				msg.innerHTML = "<span class='chat_message chat_alert'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
 				msg.classList.add("inMessage");
+			} else if (messageList[i].type == "tip"){
+				msg.innerHTML = "<span class='chat_message chat_tip'>"+message + " </span><i><small> <small>- "+safeTime+"</small></small></i>";
+				msg.classList.add("tipMessage");
 			} else {
 				msg.innerHTML = "<span class='chat_message chat_other'>"+message + "  </span><i><small> <small>- "+safeTime+"</small></small></i>";
 				msg.classList.add("inMessage");

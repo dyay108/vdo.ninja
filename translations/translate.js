@@ -33,6 +33,7 @@ const updateList = [
     "eu",
     "nl",
     "pig",
+    "pl",
     "pt",
     "pt-br",
     "ru",

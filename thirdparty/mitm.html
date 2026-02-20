@@ -43,11 +43,17 @@ function registerWorker() {
   return navigator.serviceWorker.getRegistration('./').then(swReg => {
     return swReg || navigator.serviceWorker.register('sw.js?v=2', { scope: './' })
   }).then(swReg => {
+    if (!swReg) {
+      throw new Error('[StreamSaver] Service worker registration failed')
+    }
     const swRegTmp = swReg.installing || swReg.waiting
 
     scope = swReg.scope
 
     return (sw = swReg.active) || new Promise(resolve => {
+      if (!swRegTmp) {
+        throw new Error('[StreamSaver] Service worker is not installing')
+      }
       swRegTmp.addEventListener('statechange', fn = () => {
         if (swRegTmp.state === 'activated') {
           swRegTmp.removeEventListener('statechange', fn)
@@ -157,6 +163,16 @@ if (navigator.serviceWorker) {
   registerWorker().then(() => {
     window.onmessage = onMessage
     messages.forEach(window.onmessage)
+  }).catch(err => {
+    try {
+      if (window.parent) {
+        window.parent.postMessage({
+          streamSaverError: true,
+          reason: err && err.message ? err.message : 'StreamSaver service worker failed'
+        }, '*')
+      }
+    } catch (e) {}
+    console.error(err)
   })
 }
 

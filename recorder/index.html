@@ -90,6 +90,15 @@
 			padding: 8px;
 			border: 1px solid #666;
 		}
+		#monitor {
+			background-color: #ff9800;
+			color: #1a1a1a;
+			font-weight: 600;
+		}
+		#monitor.muted {
+			background-color: #666;
+			color: #f0f0f0;
+		}
 		.recording-indicator {
 			color: red;
 			animation: pulse 1s infinite;
@@ -141,6 +150,7 @@
             <div id="meter-fill"></div>
         </div>
         <div id="controls">
+            <button id="monitor" class="muted">Unmute Monitor</button>
             <button id="record" disabled>Record</button>
             <button id="play" class="hidden">Play</button>
             <button id="download" class="hidden">Download</button>
@@ -156,6 +166,7 @@
         const videoSelect = document.getElementById('videoSource');
         const audioSelect = document.getElementById('audioSource');
         const recordingIndicator = document.getElementById('recording-indicator');
+        const monitorButton = document.getElementById('monitor');
 
         let mediaStream = null;
         let mediaRecorder = null;
@@ -164,6 +175,12 @@
         let meter = null;
         let sourceNode = null;
         let recordedBlob = null;
+        let monitorGain = null;
+        let monitorEnabled = false;
+
+		if (monitorButton) {
+			monitorButton.setAttribute('disabled', 'true');
+		}
 
 		(function (w) {
 				w.URLSearchParams =
@@ -236,6 +253,25 @@
 			}
 		}
 
+        function updateMonitorButton() {
+			if (!monitorButton) {
+				return;
+			}
+			if (monitorEnabled) {
+				monitorButton.textContent = 'Mute Monitor';
+				monitorButton.classList.remove('muted');
+			} else {
+				monitorButton.textContent = 'Unmute Monitor';
+				monitorButton.classList.add('muted');
+			}
+		}
+
+		function applyMonitorState() {
+			if (monitorGain && audioContext) {
+				monitorGain.gain.setTargetAtTime(monitorEnabled ? 1 : 0, audioContext.currentTime, 0.01);
+			}
+		}
+
         async function startMedia() {
 			try {
 				if (mediaStream) {
@@ -269,7 +305,6 @@
 						}
 					});
 				}
-
 				if (mediaStream.getVideoTracks().length > 0) {
 					videoElement.srcObject = mediaStream;
 					recordButton.removeAttribute("disabled");
@@ -280,9 +315,20 @@
 				}
 
 				if (audioContext) {
-					audioContext.close();
+					try {
+						await audioContext.close();
+					} catch (closeError) {
+						console.warn('Error closing previous audio context:', closeError);
+					}
+					audioContext = null;
+					meter = null;
+					monitorGain = null;
+					sourceNode = null;
 				}
 				audioContext = new (window.AudioContext || window.webkitAudioContext)();
+				monitorGain = audioContext.createGain();
+				monitorGain.gain.value = monitorEnabled ? 1 : 0;
+				monitorGain.connect(audioContext.destination);
 				await audioContext.audioWorklet.addModule('testrecord-processor.js');
 
 				const audioTracks = mediaStream.getAudioTracks();
@@ -293,10 +339,23 @@
 						const volume = event.data;
 						meterFill.style.width = `${Math.min(volume * 100, 100)}%`;
 					};
-					sourceNode.connect(meter).connect(audioContext.destination);
+					sourceNode.connect(meter);
+					sourceNode.connect(monitorGain);
+					applyMonitorState();
+					if (monitorButton) {
+						monitorButton.removeAttribute('disabled');
+					}
+				} else if (monitorButton) {
+					monitorEnabled = false;
+					applyMonitorState();
+					monitorButton.setAttribute('disabled', 'true');
 				}
+				updateMonitorButton();
 
 			} catch (error) {
+				if (monitorButton) {
+					monitorButton.setAttribute('disabled', 'true');
+				}
 				console.error('Error starting media:', error);
 				throw error; // Re-throw to allow handling by caller
 			}
@@ -376,6 +435,22 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         });
+
+		if (monitorButton) {
+			monitorButton.addEventListener('click', async () => {
+				if (!audioContext) {
+					return;
+				}
+				try {
+					await audioContext.resume();
+				} catch (error) {
+					console.warn('Unable to resume audio context:', error);
+				}
+				monitorEnabled = !monitorEnabled;
+				applyMonitorState();
+				updateMonitorButton();
+			});
+		}
 
         videoSelect.onchange = startMedia;
         audioSelect.onchange = startMedia;

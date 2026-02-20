@@ -647,8 +647,13 @@ button.hint {
 	position: relative;
 }
 #head4{
-	font-size: 68%; 
+	font-size: 68%;
 	color: white;
+}
+#head9 {
+	color: #b5e4ff;
+    font-weight: 500;
+    font-size: 120%;
 }
 #head5 {
 	display: inline-block;
@@ -866,6 +871,15 @@ button.hint {
 	position: relative;	
 }
 @media only screen and (max-width: 1023px){
+	#credits {
+		position: static;
+		right: auto;
+		bottom: auto;
+		margin: 24px 0 16px;
+		padding: 0 16px;
+		text-align: center;
+		width: 100%;
+	}
 	#legal {
 		display:none;
 	}
@@ -943,6 +957,7 @@ body.darktheme .footer>a:visited {
 	height: 24px;
 	box-shadow: 1px 1px 3px rgba(0,0,0,0.75);
 	font-size: 14px;
+	padding: 0;
 }
 
 .advancedAudioSettings div select[data-chosen='false'], .advancedVideoSettings div select[data-chosen='false'] {
@@ -1215,36 +1230,6 @@ hr {
 [data-slot='0'] {
 	background: linear-gradient(145deg, #dadada, #b8b8b8);
 }
-[data-slot='1'] {
-	background-color: #00AAAA
-}
-[data-slot='2'] {
-	background-color: #FF0000
-}
-[data-slot='3'] {
-	background-color: #0000FF
-}
-[data-slot='4'] {
-	background-color: #AA00AA
-}
-[data-slot='5'] {
-	background-color: #00FF00
-}
-[data-slot='6'] {
-	background-color: #AAAA00
-}
-[data-slot='7'] {
-	background-color: #AACC44
-}
-[data-slot='8'] {
-	background-color: #CCAA44
-}
-[data-slot='9'] {
-	background-color: #CC44AA
-}
-[data-slot='10'] {
-	background-color: #44AACC
-}
 #slotpicker{
 	box-shadow: 0 0 1px #908080;
 	width: 180px;
@@ -1273,6 +1258,14 @@ hr {
 	margin: 2px;
 	cursor: pointer;
 	text-shadow: 0px 0px 10px white;
+}
+#alertModalMessage{
+	display: block;
+	max-height: 70vh;
+	overflow-y: auto;
+}
+.alertModal--anchored{
+	transform: none !important;
 }
 .rem-con-count{
 	position: absolute;
@@ -1441,6 +1434,35 @@ hr {
 	width: 23px;
 	height: 23px;
 	margin: 0;
+}
+
+/* Highlight the queue controls whenever guests are waiting */
+#queuebutton.queueAttention {
+	box-shadow: 0 0 0 2px rgba(255, 120, 120, 0.35);
+	border-radius: 8px;
+}
+
+#queuebutton.queueAttention i {
+	color: #ff7b7b;
+}
+
+.queueNotification.queueNotificationPulse {
+	animation: queuePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes queuePulse {
+	0% {
+		transform: scale(1);
+		background: #335c3a;
+	}
+	50% {
+		transform: scale(1.08);
+		background: #ff7b7b;
+	}
+	100% {
+		transform: scale(1);
+		background: #335c3a;
+	}
 }
 
 button.glyphicon-button:focus,
@@ -2022,7 +2044,7 @@ input[type=range].thinSlider {
 	margin: 10px 3px;
 	border: 1px solid black;
 }
-.inMessage, .outMessage {
+.inMessage, .outMessage, .tipMessage {
     margin-bottom: 10px;
     padding: 5px;
     border-radius: 5px;
@@ -2035,6 +2057,53 @@ input[type=range].thinSlider {
     background-color: #c5d3ff;
     text-align: right;
 }
+
+.tipMessage {
+    background: linear-gradient(135deg, #ffd700 0%, #ffb700 100%);
+    color: #1a1a1a;
+    text-align: center;
+    font-weight: 500;
+    border: 1px solid #e6a800;
+}
+
+/* Tip banner - on-screen notification */
+.tipBanner {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-100px);
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.95) 0%, rgba(255, 183, 0, 0.95) 100%);
+    color: #1a1a1a;
+    padding: 15px 30px;
+    border-radius: 10px;
+    font-size: 1.4em;
+    font-weight: 600;
+    text-align: center;
+    z-index: 99999;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    border: 2px solid #e6a800;
+    opacity: 0;
+    transition: transform 0.4s ease-out, opacity 0.4s ease-out;
+    pointer-events: none;
+}
+
+.tipBanner.tipBannerShow {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.tipBanner.tipBannerHide {
+    transform: translateX(-50%) translateY(-20px);
+    opacity: 0;
+}
+
+.tipBannerMessage {
+    font-size: 0.75em;
+    font-weight: 400;
+    margin-top: 5px;
+    font-style: italic;
+}
+
 #chatBody {
     flex-grow: 1;
     overflow-y: auto;
@@ -3663,6 +3732,57 @@ video::-webkit-media-controls-panel {
 .context-menu__link:hover > #bufferSliderValue {
 	color: #fff;
 }
+
+/* Submenu support for context menu */
+.context-menu__item--has-submenu {
+	position: relative;
+}
+.context-menu__item--has-submenu > .context-menu__link::after {
+	content: '\276F';
+	float: right;
+	margin-left: 10px;
+	font-size: 0.8em;
+}
+.context-menu__submenu {
+	display: none;
+	position: absolute;
+	left: 100%;
+	top: 0;
+	z-index: 997 !important;
+	padding: 12px 0 !important;
+	width: 200px !important;
+	background-color: #fff !important;
+	border: solid 1px #dfdfdf !important;
+	box-shadow: 1px 1px 2px #cfcfcf !important;
+	list-style: none !important;
+	margin: 0;
+}
+.context-menu__item--has-submenu:hover > .context-menu__submenu {
+	display: block;
+}
+.context-menu__submenu--left {
+	left: auto;
+	right: 100%;
+}
+
+/* Dark theme for context menu and submenus */
+.darktheme .context-menu {
+	background-color: var(--discord-grey-1) !important;
+	border-color: var(--discord-grey-3) !important;
+	box-shadow: 1px 1px 3px black !important;
+}
+.darktheme .context-menu__link {
+	color: var(--discord-text) !important;
+}
+.darktheme .context-menu__link:hover {
+	background-color: var(--discord-grey-3) !important;
+}
+.darktheme .context-menu__submenu {
+	background-color: var(--discord-grey-1) !important;
+	border-color: var(--discord-grey-3) !important;
+	box-shadow: 1px 1px 3px black !important;
+}
+
 .selectedContentEffectsImage{
 	box-shadow: 0 0 10px #2c3554;
 	outline: 2px solid black;
@@ -4530,7 +4650,7 @@ div#guestFeeds:empty {
 	height:0px;
 	display: block;
 }
-#reshare {
+#reshare, #inviteLinkURL {
 	font-weight: bold; 
 	color: #afa !important; 
 	cursor: grab; 
@@ -4539,17 +4659,16 @@ div#guestFeeds:empty {
 	min-width: 335px; 
 	max-width: 800px
 }
-a#reshare {
+a#reshare , a#inviteLinkURL{
 	white-space: nowrap;
 	margin: 0;
 	padding: 0;
 	display: inline;
 }
-#copythisurl+i {
+#copythisurl+i, #copythisurl2+i {
 	display: inline;
 	font-size: 130%;
 }
-
 #joinroomID {
 	border-radius: 0;
 	padding: 5px;
@@ -4576,7 +4695,8 @@ a#reshare {
 
 #guestTips {
 	margin: 0 auto 15px auto;
-	width: 463px;
+	max-width: 463px;
+	width: 100%;
 	display: flex;
 	flex-direction: column;
 	text-align: left;
@@ -4590,18 +4710,28 @@ a#reshare {
 	margin-bottom: 10px;
 }
 
-#guestTips span:nth-child(1) {
-	color: red;
+#guestTips .guest-tip-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
 }
 
-#guestTips > span > i {
-	font-size: 2.5em;
-	margin-right: 10px;
+#guestTips .guest-tip-item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
 }
 
-#guestTips > span > span {
-	line-height: 2.5em;
-	vertical-align: bottom;
+#guestTips .guest-tip-item + .guest-tip-item {
+	margin-top: 6px;
+}
+
+#guestTips .guest-tip-item i {
+	font-size: 2.2em;
+}
+
+#guestTips .guest-tip-item span {
+	line-height: 1.4em;
 }
 
 .video-label {
@@ -4859,9 +4989,11 @@ a#reshare {
 	-webkit-appearance: slider-vertical;
 	background-color: #262c3e;
 	cursor: pointer;
-	width: 13px;
-	margin: 3px 0;
+	width: 17px;
+	margin: 0px 1px 4px 0;
+	padding: 0;
 }
+
 #closedList_connectUsers{
 
 	cursor: pointer;
@@ -5129,6 +5261,75 @@ input:checked + .slider:before {
 	overflow: hidden;
 	overflow-wrap: break-word;
 }
+
+/* PTZ Controls Modal */
+#ptzControlsModal {
+	position: absolute;
+	background-color: #ddddddee;
+	box-shadow: 0 0 30px 10px #0000005c;
+	color: black;
+	font-size: 1.0em;
+	bottom: 5%;
+	left: 50%;
+	transform: translate(-50%, 0%);
+	border-radius: 10px;
+	font-weight: bold;
+	z-index: 31;
+	width: 380px;
+	max-width: 95%;
+	overflow: hidden;
+	overflow-wrap: break-word;
+}
+.darktheme #ptzControlsModal {
+	background-color: var(--discord-grey-1);
+	color: var(--discord-text);
+}
+.ptz-control-group {
+	margin: 12px 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.ptz-control-group label {
+	min-width: 45px;
+	text-align: right;
+}
+.ptz-slider {
+	flex: 1;
+	min-width: 150px;
+}
+.ptz-value {
+	min-width: 40px;
+	text-align: left;
+	font-weight: normal;
+}
+.ptz-shortcuts {
+	margin-top: 15px;
+	padding-top: 12px;
+	border-top: 1px solid #aaa;
+	font-size: 0.85em;
+	font-weight: normal;
+}
+.ptz-shortcuts p {
+	margin: 6px 0;
+}
+.ptz-shortcuts kbd {
+	background-color: #eee;
+	border: 1px solid #ccc;
+	border-radius: 3px;
+	padding: 2px 5px;
+	font-family: monospace;
+	font-size: 0.9em;
+}
+.darktheme .ptz-shortcuts {
+	border-top-color: var(--discord-grey-3);
+}
+.darktheme .ptz-shortcuts kbd {
+	background-color: var(--discord-grey-2);
+	border-color: var(--discord-grey-3);
+	color: var(--discord-text);
+}
+
 #publishSettings{
 	position: absolute;
 	background-color: #ddddddee;
@@ -6654,8 +6855,16 @@ button.toggleSettings,
 	content: "\f2ce"; }
 .la-chalkboard:before {
 	content: "\f51b"; }
+.la-project-diagram:before {
+	content: "\f542"; }
+.la-qrcode:before {
+	content: "\f029"; }
+.la-times-circle:before {
+	content: "\f057"; }
+.la-sun:before {
+	content: "\f185"; }
 	
-	
+
 /* Minimal visual refresh overrides — non-invasive, CSS-only. */
 /* CHANGES BELOW MADE 2025-08-22 */
 
@@ -6907,7 +7116,7 @@ a.grabLinks:visited {
 }
 .darktheme a.grabLinks:link,
 .darktheme a.grabLinks:visited {
-    color: var(--a-dark-link) !important;
+    color: var(--a-dark-link);
     text-shadow: 0 1px 0 rgba(0,0,0,0.6);
 }
 a.grabLinks:hover,
@@ -7119,7 +7328,7 @@ div#chatBody a {
 .darktheme .tooltip .tooltiptext { background-color: rgba(34,37,44,0.95) !important; }
 
 /* 22) Sliders — theme-aware styling */
-input[type="range"] { -webkit-appearance: none; background: transparent; height: 24px; }
+input[type="range"] { -webkit-appearance: none; background: transparent; min-height: 24px; }
 input[type="range"]:focus { outline: none; }
 /* WebKit */
 input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: var(--lighttheme-4); border-radius: 999px; }
@@ -7163,4 +7372,649 @@ input[type="range"]::-moz-range-progress { height: 6px; background: var(--accent
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     border: 1px solid rgba(0,0,0,0.08);
     box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+}
+
+/* Tipping Feature Styles */
+.tipModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100000;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.tipModalInner {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 28px;
+    max-width: 420px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    color: #fff;
+    position: relative;
+}
+
+.tipModalInner h3 {
+    margin: 0 0 20px 0;
+    font-size: 1.3em;
+    font-weight: 600;
+    text-align: center;
+    color: #fff;
+}
+
+.tipCloseBtn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #fff;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.tipCloseBtn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.tipAmounts {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.tipAmountBtn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid transparent;
+    color: #fff;
+    padding: 14px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 1.1em;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.tipAmountBtn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+}
+
+.tipAmountBtn.selected {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 15px rgba(240, 147, 251, 0.4);
+}
+
+.tipAmountBtn.custom {
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+.tipCustomInput {
+    width: 100%;
+    padding: 14px 16px;
+    background: rgb(0, 100, 100) !important;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    color: #fff !important;
+    color: white !important;
+    font-size: 1em;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+    transition: border-color 0.2s, background 0.2s;
+    -webkit-text-fill-color: #fff !important;
+    -webkit-text-fill-color: white !important;
+    caret-color: #fff;
+    color-scheme: dark;
+}
+
+.tipCustomInput:focus {
+    outline: none;
+    border-color: rgba(100, 255, 218, 0.7);
+    background: rgb(0, 100, 100) !important;
+    color: #fff !important;
+    color: white !important;
+    -webkit-text-fill-color: #fff !important;
+    -webkit-text-fill-color: white !important;
+    color-scheme: dark;
+}
+
+.tipCustomInput::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+    -webkit-text-fill-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Override browser autofill styles */
+.tipCustomInput:-webkit-autofill,
+.tipCustomInput:-webkit-autofill:hover,
+.tipCustomInput:-webkit-autofill:focus,
+.tipCustomInput:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px rgb(0, 100, 100) inset !important;
+    -webkit-text-fill-color: #fff !important;
+    caret-color: #fff !important;
+}
+
+/* Ensure number inputs also style correctly */
+.tipCustomInput[type="number"] {
+    -moz-appearance: textfield;
+}
+
+.tipCustomInput[type="number"]::-webkit-inner-spin-button,
+.tipCustomInput[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.tipInputGroup {
+    margin-bottom: 12px;
+}
+
+.tipInputGroup label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.85em;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.tipCardElement {
+    background: rgb(0, 120, 120);
+    padding: 14px 16px;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    min-height: 24px;
+}
+
+.tipCardElement label {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.tipStripeBadge {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-bottom: 16px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.tipStripeBadge svg {
+    height: 16px;
+    width: auto;
+}
+
+.tipConfirmBtn {
+    width: 100%;
+    padding: 16px;
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 1.1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 4px 15px rgba(56, 239, 125, 0.3);
+}
+
+.tipConfirmBtn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(56, 239, 125, 0.4);
+}
+
+.tipConfirmBtn:disabled {
+    background: rgba(255, 255, 255, 0.2);
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.tipConfirmBtn.processing {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.tipError {
+    background: rgba(255, 82, 82, 0.2);
+    border: 1px solid rgba(255, 82, 82, 0.5);
+    color: #ff6b6b;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 14px;
+    font-size: 0.9em;
+    text-align: center;
+}
+
+.tipSuccess {
+    background: rgba(56, 239, 125, 0.2);
+    border: 1px solid rgba(56, 239, 125, 0.5);
+    color: #38ef7d;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 14px;
+    font-size: 0.9em;
+    text-align: center;
+}
+
+.tipPoweredBy {
+    text-align: center;
+    margin-top: 16px;
+    font-size: 0.75em;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.tipPoweredBy a {
+    color: rgba(255, 255, 255, 0.6);
+    text-decoration: none;
+}
+
+.tipPoweredBy a:hover {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.tipTotal {
+    text-align: center;
+    margin-bottom: 14px;
+    font-size: 1.1em;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.tipTotal span:last-child {
+    font-weight: 700;
+    background: linear-gradient(135deg, #f093fb, #f5576c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.tipModalHeader {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.tipModalHeader h3 {
+    margin: 0;
+    font-size: 1.3em;
+}
+
+/* Tip Button in Video Controls */
+.tipButton {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%) !important;
+    border: none !important;
+    position: relative;
+    overflow: hidden;
+}
+
+.tipButton::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: linear-gradient(45deg, transparent, rgba(255,255,255,0.3), transparent);
+    transform: rotate(45deg);
+    animation: tipButtonShine 3s infinite;
+}
+
+@keyframes tipButtonShine {
+    0% { left: -50%; }
+    100% { left: 150%; }
+}
+
+/* Tip Chat Message Styling */
+.tip-notification {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, rgba(240, 147, 251, 0.15) 0%, rgba(245, 87, 108, 0.15) 100%);
+    border-radius: 8px;
+    border-left: 3px solid #f093fb;
+}
+
+.tip-icon {
+    font-size: 1.2em;
+    margin-right: 4px;
+}
+
+.tip-amount {
+    font-weight: 700;
+    font-size: 1.15em;
+    background: linear-gradient(135deg, #f093fb, #f5576c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.tip-sender {
+    font-weight: 600;
+    color: #fff;
+}
+
+.tip-message {
+    font-style: italic;
+    color: rgba(255, 255, 255, 0.85);
+    margin-left: 4px;
+}
+
+/* Chat message container for tips */
+.message.tip-message-container {
+    background: linear-gradient(135deg, rgba(240, 147, 251, 0.08) 0%, rgba(245, 87, 108, 0.08) 100%);
+    border-radius: 8px;
+    margin: 4px 0;
+    padding: 4px;
+}
+
+/* Loading spinner for tip processing */
+.tipSpinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: tipSpin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+@keyframes tipSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* Mix dropdown styles for director audio source selection */
+.mix-dropdown {
+    position: absolute;
+    background: #2a2a2a;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 8px;
+    z-index: 1000;
+    min-width: 220px;
+    max-height: 300px;
+    overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    left: 0;
+    top: 100%;
+    margin-top: 4px;
+}
+
+.mix-dropdown-header {
+    color: #aaa;
+    font-size: 11px;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-bottom: 1px solid #444;
+    margin-bottom: 4px;
+}
+
+.mix-dropdown-section {
+    margin-bottom: 8px;
+}
+
+.mix-dropdown-section-title {
+    color: #888;
+    font-size: 10px;
+    padding: 4px 8px;
+    text-transform: uppercase;
+}
+
+.mix-dropdown-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 3px;
+    color: #ddd;
+    font-size: 12px;
+}
+
+.mix-dropdown-item:hover {
+    background: #3a3a3a;
+}
+
+.mix-dropdown-item input[type="checkbox"] {
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+.mix-dropdown-item label {
+    cursor: pointer;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mix-dropdown-container {
+    position: relative;
+}
+
+/* Dark theme adjustments */
+.darktheme .mix-dropdown {
+    background: #1a1a1a;
+    border-color: #444;
+}
+
+/* Tip Icon Overlay on Videos (two-way opt-in) */
+.tipIconOverlay {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    cursor: pointer;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tipIconOverlay:hover {
+    transform: scale(1.05);
+}
+
+/* Heart icon container - CSS heart shape */
+.tipHeart {
+    position: relative;
+    width: 36px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+    transition: opacity 0.8s ease, transform 0.8s ease;
+    flex-shrink: 0;
+}
+
+/* Heart shape using CSS */
+.tipHeart::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 36px;
+    height: 32px;
+    background: rgba(229, 57, 53, 0.95);
+    clip-path: path('M18 28 C4 18, 0 8, 9 3 C14 0, 18 4, 18 8 C18 4, 22 0, 27 3 C36 8, 32 18, 18 28 Z');
+}
+
+/* Dollar sign inside heart */
+.tipDollar {
+    position: relative;
+    z-index: 1;
+    color: white;
+    font-size: 16px;
+    font-weight: 700;
+    font-family: Arial, sans-serif;
+    line-height: 1;
+    margin-top: -2px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.tipIconOverlay:hover .tipHeart::before {
+    background: rgba(229, 57, 53, 1);
+}
+
+/* "Send a Tip" tooltip label */
+.tipLabel {
+    background: rgba(0, 0, 0, 0.85);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateX(-5px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Show label state (via JS class) */
+.tipIconOverlay.showLabel .tipLabel {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* Show tooltip on hover (immediate) */
+.tipIconOverlay:hover .tipLabel {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* QR code container - positioned below heart for OBS/scene mode */
+.tipQR {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: white;
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+    pointer-events: none;
+}
+
+/* Show QR code state (hides heart, shows QR) */
+.tipIconOverlay.showQR .tipHeart,
+.tipIconOverlay.showQR .tipLabel {
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+.tipIconOverlay.showQR .tipQR {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+}
+
+/* Smaller heart when no QR mode */
+.tipIconOverlay.noQR .tipHeart {
+    width: 30px;
+    height: 27px;
+}
+
+.tipIconOverlay.noQR .tipHeart::before {
+    width: 30px;
+    height: 27px;
+    clip-path: path('M15 24 C3 15, 0 7, 7.5 2.5 C12 0, 15 3, 15 6.5 C15 3, 18 0, 22.5 2.5 C30 7, 27 15, 15 24 Z');
+}
+
+.tipIconOverlay.noQR .tipDollar {
+    font-size: 14px;
+}
+
+/* Hide tip icon in clean mode */
+body.cleanOutput .tipIconOverlay,
+.cleanOutput .tipIconOverlay {
+    display: none !important;
+}
+
+/* Tip Onboarding Modal - matches .promptModal style */
+#tipOnboardingModal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgb(221 221 221);
+    box-shadow: 0 0 30px 10px #0000005c;
+    color: black;
+    font-weight: bold;
+    border-radius: 10px;
+    padding: 0;
+    max-width: 500px;
+    width: 90%;
+    z-index: 9999;
+    overflow: hidden;
+}
+
+.darktheme #tipOnboardingModal {
+    background-color: var(--discord-grey-5);
+    color: var(--discord-text);
+}
+
+#tipOnboardingModal .promptModalInner {
+    padding: 1em;
+}
+
+#tipOnboardingModal h2 {
+    margin: 0 0 12px 0;
+    font-size: 1.1em;
+}
+
+#tipOnboardingModal h4 {
+    margin: 16px 0 6px 0;
+    font-size: 0.95em;
+}
+
+#tipOnboardingModal p {
+    margin: 6px 0;
+    font-weight: normal;
+    font-size: 0.9em;
+}
+
+#tipOnboardingModal code {
+    background: rgba(0,0,0,0.1);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+}
+
+.darktheme #tipOnboardingModal code {
+    background: rgba(255,255,255,0.1);
+}
+
+.tipOnboardingBtn {
+    display: inline-block;
+    background: #7289da;
+    color: white !important;
+    padding: 8px 16px;
+    border-radius: 5px;
+    text-decoration: none;
+    margin: 6px 0;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+.tipOnboardingBtn:hover {
+    background: #5b6eae;
+    text-decoration: none;
 }
