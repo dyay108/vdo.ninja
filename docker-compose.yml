@@ -30,14 +30,30 @@ services:
 
     # The image is static content only; nothing needs to write to disk.
     read_only: true
-    tmpfs:
-      # /etc/nginx/conf.d is required, not just hardening: the entrypoint
-      # renders the config template into it at startup and cannot write to a
-      # read-only filesystem. Removing it stops the container with an error
-      # from 10-check-vdo-port.sh.
-      - /etc/nginx/conf.d
-      - /tmp
-      - /var/cache/nginx
+
+    # These three tmpfs mounts are required, not just hardening:
+    #   /etc/nginx/conf.d   the entrypoint renders the config template here
+    #   /tmp                nginx.pid
+    #   /var/cache/nginx    proxy/temp paths
+    #
+    # mode 1777 is load-bearing. Docker creates a tmpfs owned by root, but
+    # this image runs as UID 101, so a mount without an explicit mode is
+    # present but unwritable - the template never renders and the container
+    # dies on 10-check-vdo-port.sh with "/etc/nginx/conf.d is not writable".
+    # The short `tmpfs:` list cannot express a mode, hence the long form.
+    volumes:
+      - type: tmpfs
+        target: /etc/nginx/conf.d
+        tmpfs:
+          mode: 1777
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+      - type: tmpfs
+        target: /var/cache/nginx
+        tmpfs:
+          mode: 1777
     security_opt:
       - no-new-privileges:true
 

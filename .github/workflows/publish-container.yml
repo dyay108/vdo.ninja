@@ -118,10 +118,17 @@ jobs:
           # each: #prejoin exists only in call.html, #gridlayout only in
           # index.html.
           serves() { # $1 = host port, $2 = path, $3 = wrapper|vdoninja
-            body=$(curl -s "http://127.0.0.1:$1$2")
-            if printf '%s' "$body" | grep -q 'id="prejoin"'; then
+            # Grep a file rather than piping into grep. `grep -q` exits on the
+            # first match and closes the pipe, so the writer takes SIGPIPE -
+            # and under `set -o pipefail` that makes the whole pipeline
+            # non-zero even though the match succeeded, reporting 'neither'
+            # for a page that was served perfectly well. These bodies are
+            # 60-225 kB, well past the 64 kB pipe buffer, so it is not a
+            # theoretical race.
+            curl -s -o /tmp/serves_body "http://127.0.0.1:$1$2"
+            if grep -q 'id="prejoin"' /tmp/serves_body; then
               got=wrapper
-            elif printf '%s' "$body" | grep -q 'id="gridlayout"'; then
+            elif grep -q 'id="gridlayout"' /tmp/serves_body; then
               got=vdoninja
             else
               got=neither
@@ -167,8 +174,17 @@ jobs:
           # /etc/nginx/conf.d is load-bearing: without it the entrypoint cannot
           # render the template and nginx comes up with no server block.
           echo "--- custom VDO_PORT on a read-only rootfs ---"
+          # mode=1777 on each tmpfs is required, not cosmetic. Docker creates
+          # a tmpfs owned by root, but this image runs as UID 101, so a bare
+          # `--tmpfs /etc/nginx/conf.d` mounts a directory nginx cannot write
+          # to - the template never renders and the container dies on
+          # 10-check-vdo-port.sh. Same applies to /tmp (nginx.pid) and
+          # /var/cache/nginx.
           docker run -d --name vdo-custom -e VDO_PORT=9090 \
-            --read-only --tmpfs /etc/nginx/conf.d --tmpfs /tmp --tmpfs /var/cache/nginx \
+            --read-only \
+            --tmpfs /etc/nginx/conf.d:mode=1777 \
+            --tmpfs /tmp:mode=1777 \
+            --tmpfs /var/cache/nginx:mode=1777 \
             -p 19090:9090 vdo-ninja:smoke
           wait_up 19090 vdo-custom
           check 19090 /mixer 200 || { docker logs vdo-custom; exit 1; }
