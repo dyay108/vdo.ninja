@@ -45,6 +45,415 @@ async function main() {
 		}
 		miscTranslations["enter-display-name"] = text;
 	}
+
+	session.whepShareStatusDismissed = false;
+	session.whepTestPreviewUUID = false;
+	session.whepTestPreviewUrl = false;
+
+	function normalizeWhepShareUrl(rawUrl) {
+		if (!rawUrl || typeof rawUrl !== "string") {
+			return false;
+		}
+		const trimmedUrl = rawUrl.trim();
+		if (!trimmedUrl) {
+			return false;
+		}
+		let parsedUrl = null;
+		try {
+			parsedUrl = new URL(trimmedUrl);
+		} catch (e) {
+			return false;
+		}
+		const isHttps = parsedUrl.protocol === "https:";
+		const isLocalHttp = (parsedUrl.protocol === "http:") && ((parsedUrl.hostname === "localhost") || (parsedUrl.hostname === "127.0.0.1") || (parsedUrl.hostname === "::1") || (parsedUrl.hostname === "[::1]"));
+		if (!isHttps && !isLocalHttp) {
+			return false;
+		}
+		return parsedUrl.href;
+	}
+
+	function deriveAutoWhepShareUrl(rawWhipUrl) {
+		if (!rawWhipUrl || typeof rawWhipUrl !== "string") {
+			return false;
+		}
+		let parsedUrl = null;
+		try {
+			parsedUrl = new URL(rawWhipUrl.trim());
+		} catch (e) {
+			return false;
+		}
+		if (!parsedUrl || !parsedUrl.pathname) {
+			return false;
+		}
+
+		const hostname = parsedUrl.hostname || "";
+		const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+		if (hostname.endsWith(".cloudflarestream.com")) {
+			if ((pathParts.length >= 3) && (pathParts[0].length === 65) && (pathParts[1].toLowerCase() === "webrtc") && (pathParts[2].toLowerCase() === "publish")) {
+				parsedUrl.pathname = "/" + pathParts[0].slice(33, 65) + "/webRTC/play";
+				parsedUrl.search = "";
+				parsedUrl.hash = "";
+				return normalizeWhepShareUrl(parsedUrl.href);
+			}
+			return false;
+		}
+
+		if (/\/whip\/?$/i.test(parsedUrl.pathname)) {
+			parsedUrl.pathname = parsedUrl.pathname.replace(/\/whip\/?$/i, "/whep");
+			return normalizeWhepShareUrl(parsedUrl.href);
+		}
+		if (/\/webRTC\/publish\/?$/i.test(parsedUrl.pathname)) {
+			parsedUrl.pathname = parsedUrl.pathname.replace(/\/webRTC\/publish\/?$/i, "/webRTC/play");
+			return normalizeWhepShareUrl(parsedUrl.href);
+		}
+		if (/\/publish\/?$/i.test(parsedUrl.pathname)) {
+			parsedUrl.pathname = parsedUrl.pathname.replace(/\/publish\/?$/i, "/play");
+			return normalizeWhepShareUrl(parsedUrl.href);
+		}
+
+		return false;
+	}
+
+	function getTranslationOrFallback(key, fallbackText) {
+		try {
+			const translated = getTranslation(key);
+			if (translated && (translated !== key)) {
+				return translated;
+			}
+		} catch (e) {}
+		return fallbackText;
+	}
+
+	function updateWhepTestPreviewUI(active = false, message = "") {
+		const toggleButton = getById("whepPreviewToggle");
+		if (toggleButton) {
+			if (active) {
+				toggleButton.innerText = getTranslationOrFallback("stop-test-preview", "Stop Test Preview");
+			} else {
+				toggleButton.innerText = getTranslationOrFallback("start-test-preview", "Start Test Preview");
+			}
+			toggleButton.ariaPressed = active ? "true" : "false";
+			toggleButton.setAttribute("aria-pressed", active ? "true" : "false");
+		}
+
+		const previewState = getById("whepPreviewState");
+		if (previewState) {
+			if (message) {
+				previewState.innerText = message;
+			} else if (active) {
+				previewState.innerText = getTranslationOrFallback("whep-test-preview-running", "Test preview is running (muted).");
+			} else {
+				previewState.innerText = getTranslationOrFallback("whep-test-preview-off", "Test preview is off.");
+			}
+		}
+	}
+
+	function normalizeWhepShareInput() {
+		const whepInput = getById("whepURL");
+		if (!whepInput) {
+			return false;
+		}
+		const normalizedWhepUrl = normalizeWhepShareUrl(whepInput.value || "");
+		if (!normalizedWhepUrl) {
+			if (!session.cleanOutput) {
+				warnUser(getTranslationOrFallback("invalid-whep-source-url", "Invalid WHEP source URL. Use https:// (or http://localhost for local testing)."), 7000);
+			}
+			try {
+				whepInput.focus();
+			} catch (e) {}
+			return false;
+		}
+		whepInput.value = normalizedWhepUrl;
+		return normalizedWhepUrl;
+	}
+
+	function applyWhepShareSettings(whepUrl) {
+		if (!whepUrl) {
+			return false;
+		}
+		session.whepSrc = whepUrl;
+		session.whipoutSettings = { type: "whep", url: whepUrl };
+		if (session.whepSrcToken) {
+			session.whipoutSettings.token = session.whepSrcToken;
+		}
+		session.whipoutSettingsUserSet = true;
+		session.whepShareStatusDismissed = false;
+		updateWhepShareStatus();
+
+		try {
+			if (typeof broadcastWhepSettings === "function") {
+				broadcastWhepSettings("primary");
+			}
+		} catch (e) {
+			warnlog(e);
+		}
+		return true;
+	}
+
+	function muteWhepTestPreviewElement(UUID, retries = 30) {
+		if (!UUID || (session.whepTestPreviewUUID !== UUID)) {
+			return;
+		}
+		const rpc = session.rpcs && session.rpcs[UUID];
+		if (!rpc) {
+			return;
+		}
+		if (rpc.videoElement) {
+			try {
+				rpc.videoElement.muted = true;
+				rpc.videoElement.defaultMuted = true;
+				rpc.videoElement.volume = 0;
+				rpc.videoElement.setAttribute("muted", "");
+				if (rpc.videoElement.play) {
+					rpc.videoElement.play().catch(() => {});
+				}
+			} catch (e) {
+				warnlog(e);
+			}
+			return;
+		}
+		if (retries > 0) {
+			setTimeout(function () {
+				muteWhepTestPreviewElement(UUID, retries - 1);
+			}, 250);
+		}
+	}
+
+	function stopWhepTestPreview(showNotice = true, statusMessage = "") {
+		const UUID = session.whepTestPreviewUUID;
+		if (!UUID) {
+			updateWhepTestPreviewUI(false, statusMessage);
+			return;
+		}
+		const rpc = session.rpcs && session.rpcs[UUID];
+		if (rpc) {
+			rpc.suppressReconnect = true;
+			rpc.reconnecting = false;
+			try {
+				if (rpc.whep && rpc.whep.iceCompletedCallback) {
+					rpc.whep.iceCompletedCallback();
+				}
+			} catch (e) {}
+
+			try {
+				if (rpc.whep && rpc.whep.close) {
+					rpc.whep.close();
+				}
+			} catch (e) {
+				warnlog(e);
+			}
+
+			try {
+				if (rpc.videoElement && rpc.videoElement.recorder) {
+					rpc.videoElement.recorder.stop();
+				}
+			} catch (e) {}
+
+			try {
+				if (rpc.streamSrc) {
+					rpc.streamSrc.getTracks().forEach(function (track) {
+						track.stop();
+					});
+					rpc.streamSrc = null;
+				}
+			} catch (e) {}
+
+			try {
+				if (rpc.videoElement) {
+					rpc.videoElement.srcObject = null;
+					rpc.videoElement.remove();
+					rpc.videoElement = null;
+				}
+			} catch (e) {}
+
+			try {
+				if (rpc.canvas) {
+					rpc.canvas.remove();
+				}
+			} catch (e) {}
+
+			try {
+				if (rpc.imageElement) {
+					rpc.imageElement.remove();
+				}
+			} catch (e) {}
+
+			try {
+				if ("eventPlayActive" in rpc) {
+					clearInterval(rpc.eventPlayActive);
+				}
+			} catch (e) {}
+		}
+
+		try {
+			const previewContainer = document.getElementById("container_" + UUID);
+			if (previewContainer && previewContainer.parentNode) {
+				previewContainer.parentNode.removeChild(previewContainer);
+				updateLockedElements();
+			}
+		} catch (e) {}
+
+		try {
+			delete session.rpcs[UUID];
+		} catch (e) {}
+
+		session.whepTestPreviewUUID = false;
+		session.whepTestPreviewUrl = false;
+		updateWhepTestPreviewUI(false, statusMessage);
+		if (showNotice && !session.cleanOutput) {
+			warnUser(getTranslationOrFallback("whep-test-preview-stopped", "WHEP test preview stopped."), 3000);
+		}
+		setTimeout(function () {
+			updateMixer();
+		}, 1);
+	}
+
+	window.stopWhepTestPreview = function (showNotice = true, statusMessage = "") {
+		stopWhepTestPreview(showNotice, statusMessage);
+	};
+
+	window.handleWhepUrlInputChange = function () {
+		if (!session.whepTestPreviewUUID) {
+			return;
+		}
+		const whepInput = getById("whepURL");
+		const normalizedWhepUrl = normalizeWhepShareUrl((whepInput && whepInput.value) || "");
+		if (!normalizedWhepUrl || (normalizedWhepUrl !== session.whepTestPreviewUrl)) {
+			stopWhepTestPreview(false, getTranslationOrFallback("whep-test-preview-stopped-url-change", "Test preview stopped because the URL changed."));
+		}
+	};
+
+	window.toggleWhepTestPreview = async function (event) {
+		if (event) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+
+		if (session.whepTestPreviewUUID) {
+			stopWhepTestPreview(true);
+			return false;
+		}
+
+		const normalizedWhepUrl = normalizeWhepShareInput();
+		if (!normalizedWhepUrl) {
+			return false;
+		}
+
+		const previewUUID = "wheptest_" + session.generateRandomString(24);
+		session.whepTestPreviewUUID = previewUUID;
+		session.whepTestPreviewUrl = normalizedWhepUrl;
+		updateWhepTestPreviewUI(true, getTranslationOrFallback("whep-test-preview-starting", "Starting WHEP test preview (muted)..."));
+
+		try {
+			await whepIn(normalizedWhepUrl, session.whepSrcToken || false, previewUUID);
+			muteWhepTestPreviewElement(previewUUID);
+			updateWhepTestPreviewUI(true, getTranslationOrFallback("whep-test-preview-running", "Test preview is running (muted)."));
+			if (!session.cleanOutput) {
+				warnUser(getTranslationOrFallback("whep-test-preview-started", "WHEP test preview started (muted)."), 3000);
+			}
+		} catch (e) {
+			errorlog(e);
+			stopWhepTestPreview(false, getTranslationOrFallback("whep-test-preview-failed", "Test preview failed. Check URL/token and try again."));
+			if (!session.cleanOutput) {
+				warnUser(getTranslationOrFallback("whep-test-preview-failed", "Test preview failed. Check URL/token and try again."), 6000);
+			}
+		}
+		return false;
+	};
+
+	window.startWhepSharingFromInput = function (event) {
+		if (event) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+
+		const normalizedWhepUrl = normalizeWhepShareInput();
+		if (!normalizedWhepUrl) {
+			return false;
+		}
+
+		if (session.whepTestPreviewUUID) {
+			stopWhepTestPreview(false, getTranslationOrFallback("whep-test-preview-stopped-before-share", "Test preview stopped before sharing."));
+		}
+
+		applyWhepShareSettings(normalizedWhepUrl);
+		const shareButton = getById("whepShareStart");
+		if (shareButton) {
+			shareButton.innerText = getTranslationOrFallback("update", "Update");
+		}
+		try {
+			session.publishIFrame(normalizedWhepUrl);
+		} catch (e) {
+			errorlog(e);
+		}
+		return false;
+	};
+
+	updateWhepTestPreviewUI(false);
+
+	window.dismissWhepShareStatus = function (event) {
+		if (event) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+		session.whepShareStatusDismissed = true;
+		const status = getById("whepShareStatus");
+		if (status) {
+			status.classList.add("hidden");
+		}
+	};
+
+	function updateWhepShareStatus() {
+		const status = getById("whepShareStatus");
+		if (!status) {
+			return;
+		}
+		if (session.cleanOutput || session.whepShareStatusDismissed) {
+			status.classList.add("hidden");
+			return;
+		}
+		const settings = session.whipoutSettings;
+		const hasWhepShare = session.whipoutSettingsUserSet && settings && settings.type === "whep" && settings.url;
+		if (!hasWhepShare) {
+			status.classList.add("hidden");
+			return;
+		}
+		status.classList.remove("hidden");
+		const linkInput = getById("whepShareLink");
+		if (linkInput) {
+			linkInput.value = settings.url;
+		}
+		const openLink = getById("whepShareOpen");
+		if (openLink) {
+			openLink.href = settings.url;
+		}
+		const tokenNote = getById("whepShareTokenNote");
+		if (tokenNote) {
+			if (settings.token) {
+				tokenNote.classList.remove("hidden");
+			} else {
+				tokenNote.classList.add("hidden");
+			}
+		}
+		const dataOnlyNote = getById("whepShareDataOnly");
+		if (dataOnlyNote) {
+			if (session.dataMode) {
+				dataOnlyNote.classList.remove("hidden");
+			} else {
+				dataOnlyNote.classList.add("hidden");
+			}
+		}
+		const description = getById("whepShareDescription");
+		if (description) {
+			if (session.noMeshcast) {
+				description.innerText = getTranslationOrFallback("whep-share-disabled-advertising", "WHEP sharing is configured, but &nowhep/nomeshcast disables advertising to peers.");
+			} else if (session.roomid === false || session.roomid === null || session.roomid === "") {
+				description.innerText = getTranslationOrFallback("whep-share-join-room", "WHEP sharing is configured. Join a room to advertise it to peers.");
+			} else {
+				description.innerText = getTranslationOrFallback("whep-share-advertising", "Advertising a WHEP source to room peers via the data channel.");
+			}
+		}
+	}
 	
 	try {
 		if (ConfigSettings) {
@@ -98,10 +507,10 @@ async function main() {
 	}
 	
 	// Initialize authentication if enabled
-	if (window.vdoAuth) {
+	if (window.vdoAuth && (urlParams.has("auth") || urlParams.has("requireauth") || urlParams.has("universaltoken") || urlParams.has("authtoken"))) {
 		getById("mainmenu").classList.add("hidden2");
 		getById("header").classList.add("hidden2");
-		
+
 		await window.vdoAuth.init();
 		// Menu visibility is now handled by auth completion
 		if (session.authMode && (session.authToken || session.authSkipped)) {
@@ -178,7 +587,7 @@ async function main() {
 	} else {
 		// check if automatic language translation is available
 		getById("mainmenu").style.opacity = 1;
-		
+
 		if (location.hostname === "alt.vdo.ninja"){
 			session.wss = "wss://china.rtc.ninja:8443";
 		} 
@@ -450,6 +859,133 @@ async function main() {
 		}
 	}
 
+	if (urlParams.has("autorelay")) {
+		var autoRelay = (urlParams.get("autorelay") || "1").toLowerCase();
+		if (["0", "false", "off", "no"].includes(autoRelay)) {
+			session.autoRelay = false;
+		} else {
+			session.autoRelay = true;
+		}
+	}
+
+	if (urlParams.has("autorecover")) {
+		var autoRecover = (urlParams.get("autorecover") || "1").toLowerCase();
+		if (["0", "false", "off", "no"].includes(autoRecover)) {
+			session.autoRelay = false;
+			session.adaptiveDisconnect = false;
+			session.autoWhepFallback = false;
+		} else {
+			session.autoRelay = true;
+			session.adaptiveDisconnect = true;
+			session.autoWhepFallback = true;
+		}
+	}
+
+	if (urlParams.has("p2pfailtimeout")) {
+		var p2pFailTimeout = parseInt(urlParams.get("p2pfailtimeout"));
+		if (Number.isFinite(p2pFailTimeout) && p2pFailTimeout > 0) {
+			session.p2pFailTimeoutMs = Math.min(45000, Math.max(3000, p2pFailTimeout));
+		}
+	}
+
+	if (urlParams.has("peerrecoversteps") || urlParams.has("p2precoversteps")) {
+		var peerRecoverSteps = parseInt(urlParams.get("peerrecoversteps") || urlParams.get("p2precoversteps"));
+		if (Number.isFinite(peerRecoverSteps) && peerRecoverSteps > 0) {
+			session.peerRecoverMaxSteps = Math.min(6, Math.max(1, peerRecoverSteps));
+		}
+	}
+
+	if (urlParams.has("testmedia") || urlParams.has("syntheticmedia")) {
+		var testMediaMode = (urlParams.get("testmedia") || urlParams.get("syntheticmedia") || "1").toLowerCase();
+		if (["0", "false", "off", "no"].includes(testMediaMode)) {
+			session.testMedia = false;
+		} else {
+			session.testMedia = true;
+			if (["audio", "mic", "a"].includes(testMediaMode)) {
+				session.testMediaAudio = true;
+				session.testMediaVideo = false;
+			} else if (["video", "cam", "v"].includes(testMediaMode)) {
+				session.testMediaAudio = false;
+				session.testMediaVideo = true;
+			}
+			if (urlParams.has("testaudio")) {
+				var testAudioMode = (urlParams.get("testaudio") || "1").toLowerCase();
+				session.testMediaAudio = !["0", "false", "off", "no"].includes(testAudioMode);
+			}
+			if (urlParams.has("testvideo")) {
+				var testVideoMode = (urlParams.get("testvideo") || "1").toLowerCase();
+				session.testMediaVideo = !["0", "false", "off", "no"].includes(testVideoMode);
+			}
+			if (urlParams.has("testfps")) {
+				var testFps = parseInt(urlParams.get("testfps"));
+				if (Number.isFinite(testFps) && testFps > 0) {
+					session.testMediaFps = Math.min(60, Math.max(1, testFps));
+				}
+			}
+			if (urlParams.has("testwidth")) {
+				var testWidth = parseInt(urlParams.get("testwidth"));
+				if (Number.isFinite(testWidth) && testWidth > 0) {
+					session.testMediaWidth = Math.min(3840, Math.max(160, testWidth));
+				}
+			}
+			if (urlParams.has("testheight")) {
+				var testHeight = parseInt(urlParams.get("testheight"));
+				if (Number.isFinite(testHeight) && testHeight > 0) {
+					session.testMediaHeight = Math.min(2160, Math.max(120, testHeight));
+				}
+			}
+			if (urlParams.has("testtone")) {
+				var testTone = parseInt(urlParams.get("testtone"));
+				if (Number.isFinite(testTone) && testTone > 0) {
+					session.testMediaTone = Math.min(2000, Math.max(50, testTone));
+				}
+			}
+			if (session.testMediaAudio === false && session.testMediaVideo === false) {
+				session.testMediaAudio = true;
+			}
+			if (typeof enableTestMediaCapture === "function") {
+				enableTestMediaCapture();
+			}
+		}
+	}
+
+	if (urlParams.has("pendingicettl")) {
+		var pendingIceTtl = parseInt(urlParams.get("pendingicettl"));
+		if (Number.isFinite(pendingIceTtl) && pendingIceTtl > 0) {
+			if (pendingIceTtl < 3000) {
+				pendingIceTtl = 3000;
+			} else if (pendingIceTtl > 60000) {
+				pendingIceTtl = 60000;
+			}
+			session.pendingIceTTL = pendingIceTtl;
+		}
+	}
+
+	if (urlParams.has("adaptivedisconnect")) {
+		var adaptiveDisconnect = (urlParams.get("adaptivedisconnect") || "1").toLowerCase();
+		if (["0", "false", "off", "no"].includes(adaptiveDisconnect)) {
+			session.adaptiveDisconnect = false;
+		} else {
+			session.adaptiveDisconnect = true;
+		}
+	}
+
+	if (urlParams.has("disconnectfloor")) {
+		var disconnectFloor = parseInt(urlParams.get("disconnectfloor"));
+		if (Number.isFinite(disconnectFloor) && disconnectFloor > 0) {
+			session.disconnectFloor = disconnectFloor;
+		}
+	}
+	if (urlParams.has("disconnectceil")) {
+		var disconnectCeil = parseInt(urlParams.get("disconnectceil"));
+		if (Number.isFinite(disconnectCeil) && disconnectCeil > 0) {
+			session.disconnectCeil = disconnectCeil;
+		}
+	}
+	if (session.disconnectCeil < session.disconnectFloor) {
+		session.disconnectCeil = session.disconnectFloor;
+	}
+
 	if (urlParams.has("ptz")) {
 		session.ptz = true;
 	}
@@ -693,8 +1229,14 @@ async function main() {
 		if (session.redirectHangup) {
 			try {
 				session.redirectHangup = decodeURIComponent(session.redirectHangup);
-				getById("hangupContainer").innerHTML = "Hang-up complete.  Redirecting shortly...";
 			} catch (e) {}
+
+			session.redirectHangup = sanitizeRedirectURL(session.redirectHangup, 4096);
+			if (session.redirectHangup) {
+				getById("hangupContainer").innerHTML = "Hang-up complete.  Redirecting shortly...";
+			} else {
+				warnlog("Blocked unsafe endpage URL parameter.");
+			}
 		}
 		
 		if (urlParams.has("endpagetimer")) {
@@ -1048,7 +1590,15 @@ async function main() {
 	}
 	
 	if (urlParams.has("drawing")) {
-		session.allowDrawing = urlParams.get("drawing") || true;
+		const drawingValue = (urlParams.get("drawing") || "").toLowerCase();
+		session.allowDrawing = !(drawingValue === "0" || drawingValue === "false" || drawingValue === "off");
+	}
+	if (urlParams.has("drawingrelay") || urlParams.has("shareddrawing")) {
+		const relayValue = (urlParams.get("drawingrelay") || urlParams.get("shareddrawing") || "").toLowerCase();
+		session.drawingRelay = !(relayValue === "0" || relayValue === "false" || relayValue === "off");
+	}
+	if (urlParams.has("nodrawingrelay") || urlParams.has("noshareddrawing")) {
+		session.drawingRelay = false;
 	}
 	
 	if (urlParams.has("nohistory")) {
@@ -1408,6 +1958,7 @@ async function main() {
 		} catch (e) {
 			console.error(e);
 		}
+		htmlmessage = sanitizeCustomHTML(htmlmessage, 4096);
 		getById("hangupContainer").innerHTML = htmlmessage;
 	}
 
@@ -1788,6 +2339,18 @@ async function main() {
 	if (session.directorBlindButton) {
 		getById("blindAllGuests").classList.remove("hidden");
 	}
+	if (urlParams.has("muteall") || urlParams.has("muteallguests") || urlParams.has("muteguests")) {
+		session.directorMuteAllButton = true;
+	}
+	if (session.directorMuteAllButton) {
+		getById("muteAllGuests").classList.remove("hidden");
+	}
+	if (urlParams.has("gdriveall") || urlParams.has("gdriverecordall")) {
+		session.directorGdriveAllButton = true;
+	}
+	if (session.directorGdriveAllButton) {
+		getById("gdriveAllGuests").classList.remove("hidden");
+	}
 
 	if (urlParams.has("dpi") || urlParams.has("dpr") || urlParams.has("sharper") || urlParams.has("sharpen")) {
 		session.devicePixelRatio = urlParams.get("dpi") || urlParams.get("dpr") || 2.0;
@@ -1984,7 +2547,8 @@ async function main() {
 	}
 
 	if (urlParams.has("cover")) {
-		session.cover = urlParams.get("cover") || true;
+		var coverVal = urlParams.get("cover");
+		session.cover = (coverVal == 2) ? 2 : true;
 		document.documentElement.style.setProperty("--fit-style", "cover");
 		document.documentElement.style.setProperty("--myvideo-max-width", "100vw");
 		document.documentElement.style.setProperty("--myvideo-width", "100vw");
@@ -2246,6 +2810,10 @@ async function main() {
 		session.openscene = true;
 	}
 
+	if (urlParams.has("scenerestore")) {
+		session.sceneRestore = true;
+	}
+
 	if (urlParams.has("solo")) {
 		if (session.scene === false) {
 			session.scene = "0";
@@ -2473,7 +3041,7 @@ async function main() {
 		}
 	}
 
-	if (session.director && urlParams.has("autochannels") || urlParams.has("autochannel")) {
+	if (session.director && (urlParams.has("autochannels") || urlParams.has("autochannel"))) {
 		// Director-only: auto-assign guests to audio channels
 		var val = urlParams.get("autochannels") || urlParams.get("autochannel");;
 		if (val) {
@@ -2548,7 +3116,14 @@ async function main() {
 	if (urlParams.has("cccolored") || urlParams.has("cccoloured") || urlParams.has("coloredcc") || urlParams.has("colorcc") || urlParams.has("cccolor")) {
 		session.ccColored = true;
 	}
-	
+
+	if (urlParams.has("sessionlog") || urlParams.has("slog") || urlParams.has("sessionmarkers")) {
+		session.sessionLog = true;
+	}
+
+	if (urlParams.has("sessionlogtranscript") || urlParams.has("slogtranscript") || urlParams.has("slogt")) {
+		session.sessionLogTranscript = true;
+	}
 
 	if (urlParams.has("base64css") || urlParams.has("b64css") || urlParams.has("cssbase64") || urlParams.has("cssb64")) {
 		try {
@@ -2755,7 +3330,7 @@ async function main() {
 					allow = await confirmAlt("This link wishes to inject third-party Javascript ⚠️\n\nIf you trust the link, click OK. Otherwise, click cancel.", true);
 				}
 			} catch(e){
-				allow = true;
+				allow = false;
 				warnlog(e);
 			}
 			
@@ -2799,7 +3374,7 @@ async function main() {
 				}
 			} catch(e){
 				warnlog(e);
-				allow = true;
+				allow = false;
 			}
 			
 			if (allow){
@@ -3325,6 +3900,22 @@ async function main() {
 		session.noiseSuppression = false;
 	}
 
+	if (urlParams.has("noheadphones") || urlParams.has("nhp")) {
+		// Force voice processing on for speaker-based setups without headphones.
+		// Overrides proaudio/stereo disabling of AEC. Individual &aec/&denoise/&autogain params can still override.
+		log("NO HEADPHONES MODE");
+		session.echoCancellation = true;
+		session.autoGainControl = true;
+		session.noiseSuppression = true;
+		if (session.voiceIsolation === null) {
+			session.voiceIsolation = true;
+		}
+		if (session.noisegate === null) {
+			session.noisegate = true;
+			session.audioEffects = true;
+		}
+	}
+
 	if (urlParams.has("channelcount") || urlParams.has("ac") || urlParams.has("inputchannels")) {
 		// if updates to this, see also function toggleMonoStereoMic()
 		session.audioInputChannels = urlParams.get("channelcount") || urlParams.get("ac") || urlParams.get("inputchannels") || 0;
@@ -3536,6 +4127,9 @@ async function main() {
 	if (urlParams.has("streamid") || urlParams.has("view") || urlParams.has("v") || urlParams.has("V") ||urlParams.has("pull")) {
 		// the streams we want to view; if set, but let blank, we will request no streams to watch.
 		session.view = urlParams.get("streamid") || urlParams.get("view") || urlParams.get("v") || urlParams.get("V") || urlParams.get("pull") || null; // this value can be comma seperated for multiple streams to pull
+
+		const dmcaBlockedViewIDs = []; // add/remove blocked IDs here.
+		if ((session.view || "").split(",").map(function (v) { return v.trim(); }).some(function (v) { return dmcaBlockedViewIDs.indexOf(v) !== -1; })) { warnUser("This stream is not available due to a DMCA request."); return; }
 
 		getById("headphonesDiv2").classList.remove("hidden");
 		getById("headphonesDiv").classList.remove("hidden");
@@ -3892,6 +4486,15 @@ async function main() {
 		session.automute = urlParams.get("automute") || true;
 		session.micIsolatedAutoMute = []; // default auto mutes
 	}
+
+	if (urlParams.has("highlightmute") || urlParams.has("hmute") || urlParams.has("mutefollowhighlight") || urlParams.has("mfh")) {
+		var highlightMuteFollow = urlParams.get("highlightmute") || urlParams.get("hmute") || urlParams.get("mutefollowhighlight") || urlParams.get("mfh") || true;
+		if (["false", "0", "no", "off"].includes((highlightMuteFollow + "").toLowerCase())) {
+			session.highlightMuteFollow = false;
+		} else {
+			session.highlightMuteFollow = true;
+		}
+	}
 	
 	if (urlParams.has("noobsstream")){
 		session.obsState.streaming = false;
@@ -4065,9 +4668,10 @@ async function main() {
 		}
 	}
 	
-	if (urlParams.has("holdercolor")) {
+	const holderColorParam = ["holdercolor", "videobg", "videobgcolor", "videobackground", "videobackgroundcolor", "holderbg", "holderbgcolor"].find(param => urlParams.has(param));
+	if (holderColorParam) {
 		try {
-			session.holderColor = urlParams.get("holdercolor") || session.borderColor || "#000";
+			session.holderColor = urlParams.get(holderColorParam) || session.borderColor || "#000";
 			if (parseInt(session.holderColor) == session.holderColor){
 				session.holderColor = "#"+session.holderColor;
 			}
@@ -4501,15 +5105,56 @@ async function main() {
 		session.alpha = true;
 	}
 
+	if (urlParams.has("viewchroma") || urlParams.has("vchroma")) {
+		session.viewChroma = true;
+		session.viewChromaColor = urlParams.get("viewchroma") || urlParams.get("vchroma") || "0f0";
+
+		var viewChromaThreshold = parseInt(urlParams.get("viewchromathreshold") || urlParams.get("vchromathreshold") || urlParams.get("viewchromathresh") || urlParams.get("vchromathresh"));
+		if (Number.isFinite(viewChromaThreshold)) {
+			session.viewChromaThreshold = viewChromaThreshold;
+		}
+
+		var viewChromaSmoothing = parseInt(urlParams.get("viewchromasmoothing") || urlParams.get("vchromasmoothing") || urlParams.get("viewchromasmooth") || urlParams.get("vchromasmooth"));
+		if (Number.isFinite(viewChromaSmoothing)) {
+			session.viewChromaSmoothing = viewChromaSmoothing;
+		}
+
+		session.viewChromaHideSource = true;
+		if (urlParams.has("viewchromahide") || urlParams.has("viewchromahidesource") || urlParams.has("vchromahide") || urlParams.has("vchromahidesource")) {
+			var viewChromaHideSource = (urlParams.get("viewchromahide") || urlParams.get("viewchromahidesource") || urlParams.get("vchromahide") || urlParams.get("vchromahidesource") || "1").toLowerCase();
+			session.viewChromaHideSource = !(viewChromaHideSource === "0" || viewChromaHideSource === "false" || viewChromaHideSource === "off");
+		}
+	}
+
 	if (urlParams.has("chunked") || urlParams.has("chunk")) {
 		session.chunked = parseInt(urlParams.get("chunked")) || parseInt(urlParams.get("chunk")) || 2500; // sender side; enables to allows.
 		// session.alpha = true;
-		if (Firefox || SafariVersion) {
+		if (Firefox || (SafariVersion && !(iOS || iPad))) {
 			if (!session.cleanOutput) {
 				warnUser("Only Chromium-based browsers support chunked mode.\n\nPlease switch to Chrome or another compatible browser to use &chunked mode.");
 			}
 			session.chunked = false;
 			console.warn("Disabling chunked mode since not using a compatible browser.");
+		} else if (SafariVersion && (iOS || iPad)) {
+			var wantsFullEncodedChunked = !(urlParams.has("nochunkaudio") || urlParams.has("nochunkedaudio") || urlParams.has("pcm"));
+			var hasFullEncodedChunkedSupport = (
+				typeof MediaStreamTrackProcessor === "function" &&
+				typeof MediaStreamTrackGenerator === "function" &&
+				typeof VideoEncoder === "function" &&
+				typeof AudioEncoder === "function" &&
+				typeof VideoDecoder === "function" &&
+				typeof AudioDecoder === "function" &&
+				typeof EncodedVideoChunk === "function" &&
+				typeof EncodedAudioChunk === "function"
+			);
+			var allowMobileSafariChunked = (SafariVersion >= 26) && wantsFullEncodedChunked && hasFullEncodedChunkedSupport;
+			if (!allowMobileSafariChunked) {
+				if (!session.cleanOutput) {
+					warnUser("Chunked mode on iOS/iPadOS is only enabled on version 26+ when full encoded WebCodecs support is present.");
+				}
+				session.chunked = false;
+				console.warn("Disabling chunked mode on iOS/iPadOS Safari/WebKit.");
+			}
 		}
 	}
 	if (urlParams.has("chunkedbuffer") || urlParams.has("sendingbuffer")) {
@@ -4616,9 +5261,13 @@ async function main() {
 
 	parseIntegerParam("chunkfec", "chunkfec", [0, 12]);
 	parseBooleanParam("chunknack", "chunknack");
-	parseIntegerParam("chunkbuffer", "chunkbuffer", [0, 30000]);
-	parseIntegerParam("chunkbufferfloor", "chunkbufferfloor", [0, 30000]);
-	parseIntegerParam("chunkbufferceil", "chunkbufferceil", [0, 60000]);
+	parseIntegerParam("chunkbuffer", "chunkbuffer", [0, 180000]);
+	parseIntegerParam("chunkbufferfloor", "chunkbufferfloor", [0, 180000]);
+	parseIntegerParam("chunkbufferceil", "chunkbufferceil", [0, 180000]);
+	parseBooleanParam("chunkbufferadaptive", "chunkbufferadaptive");
+	if (urlParams.has("fixedchunkbuffer")) {
+		session.chunkbufferadaptive = false;
+	}
 	parseIntegerParam("chunkjitterslack", "chunkjitterslack", [0, 10000]);
 
 	if (urlParams.has("chunkadapt")) {
@@ -4680,14 +5329,19 @@ async function main() {
 	}
 
 	if (urlParams.has("debug")) {
-		DebugLog = true;
-		if (!errorReport) {
-			errorReport = [];
-		}
-		if (urlParams.get("debug") == "1") {
-			debugStart();
-		} else if (urlParams.get("debug")) {
-			debugStart(urlParams.get("debug"));
+		const debugHost = ((window.location && window.location.hostname) || "").toLowerCase();
+		const allowDebug = debugHost === "vdo.ninja" || debugHost.endsWith(".vdo.ninja");
+		if (allowDebug) {
+			const debugSetting = (urlParams.get("debug") || "1").toLowerCase();
+			if (!["0", "false", "off", "no"].includes(debugSetting)) {
+				DebugLog = true;
+				if (!errorReport) {
+					errorReport = [];
+				}
+				debugStart(); // locked to official debug endpoint in webrtc.js
+			}
+		} else {
+			warnlog("Debug mode is disabled outside vdo.ninja domains.");
 		}
 	}
 
@@ -5056,6 +5710,7 @@ async function main() {
 			session.welcomeMessage = session.welcomeMessage.replace(/(\r\n|\n|\r)/gm, " ");
 			session.welcomeMessage = decodeURIComponent(session.welcomeMessage);
 		} catch (e) {}
+		session.welcomeMessage = sanitizeCustomHTML(session.welcomeMessage, 4096);
 	}
 
 	if (urlParams.has("welcomehtml")) {
@@ -5068,6 +5723,7 @@ async function main() {
 			session.welcomeHTML = session.welcomeHTML.replace(/(\r\n|\n|\r)/gm, " ");
 			session.welcomeHTML = decodeURIComponent(session.welcomeHTML);
 		} catch (e) {}
+		session.welcomeHTML = sanitizeCustomHTML(session.welcomeHTML, 8192);
 	}
 
 	if (urlParams.has("welcomeimage") || urlParams.has("welcomeimg")) {
@@ -5124,6 +5780,7 @@ async function main() {
 	}
 
 	if (urlParams.has("totalroombitrate") || urlParams.has("totalroomvideobitrate") || urlParams.has("trb") || urlParams.has("totalbitrate") || urlParams.has("tb")) {
+		session.totalRoomBitrate_userSet = true;
 		session.totalRoomBitrate = urlParams.get("totalroombitrate") || urlParams.get("totalroomvideobitrate") || urlParams.get("trb") || urlParams.get("totalbitrate") || urlParams.get("tb") || "";
 
 		if (session.totalRoomBitrate.split(",").length > 1) {
@@ -5145,6 +5802,20 @@ async function main() {
 		}
 		log("totalRoomBitrate ENABLED");
 		log(session.totalRoomBitrate);
+	}
+
+	if (urlParams.has("roomtier1bitrate") || urlParams.has("rt1b") || urlParams.has("roomonlylowbitrate") || urlParams.has("rolb")) {
+		var roomTier1Bitrate = parseInt(urlParams.get("roomtier1bitrate") || urlParams.get("rt1b") || urlParams.get("roomonlylowbitrate") || urlParams.get("rolb")) || 0;
+		if (roomTier1Bitrate > 0) {
+			session.roomTier1Bitrate = roomTier1Bitrate;
+		}
+	}
+
+	if (urlParams.has("roomtier2bitrate") || urlParams.has("rt2b") || urlParams.has("roomonlybitrate") || urlParams.has("rob")) {
+		var roomTier2Bitrate = parseInt(urlParams.get("roomtier2bitrate") || urlParams.get("rt2b") || urlParams.get("roomonlybitrate") || urlParams.get("rob")) || 0;
+		if (roomTier2Bitrate > 0) {
+			session.roomTier2Bitrate = roomTier2Bitrate;
+		}
 	}
 
 	if (session.totalRoomBitrate === false) {
@@ -5239,8 +5910,8 @@ async function main() {
 		getById("whipoutaudiobitrate").classList.add("hidden");
 	}
 
-	if (urlParams.has("mcb") || urlParams.has("mcbitrate") || urlParams.has("meshcastbitrate") || urlParams.has("whipoutvideobitrate") || urlParams.has("wovb")) {
-		session.whipOutVideoBitrate = urlParams.get("mcb") || urlParams.get("mcbitrate") || urlParams.get("meshcastbitrate") || urlParams.get("whipoutvideobitrate") || urlParams.get("wovb") || false;
+	if (urlParams.has("mcb") || urlParams.has("mcbitrate") || urlParams.has("meshcastbitrate") || urlParams.has("mediamtxbitrate") || urlParams.has("whipbitrate") || urlParams.has("whipoutvideobitrate") || urlParams.has("wovb")) {
+		session.whipOutVideoBitrate = urlParams.get("mcb") || urlParams.get("mcbitrate") || urlParams.get("meshcastbitrate") || urlParams.get("mediamtxbitrate") || urlParams.get("whipbitrate") || urlParams.get("whipoutvideobitrate") || urlParams.get("wovb") || false;
 		if (session.whipOutVideoBitrate) {
 			session.whipOutVideoBitrate = parseInt(session.whipOutVideoBitrate);
 		}
@@ -5559,6 +6230,37 @@ async function main() {
 		}
 
 		log("maxconnections set");
+	}
+
+	if (urlParams.has("roomcap") || urlParams.has("rcap")) {
+		let roomCap = urlParams.get("roomcap");
+		if (roomCap === null || roomCap === "") {
+			roomCap = urlParams.get("rcap") || "";
+		}
+		roomCap = parseInt(roomCap, 10);
+		if (Number.isFinite(roomCap) && roomCap > 0) {
+			session.claimRoomCap = roomCap;
+		} else {
+			session.claimRoomCap = false;
+		}
+	}
+
+	if (urlParams.has("roomkey") || urlParams.has("rk")) {
+		const roomBypassKey = sanitizePassword(urlParams.get("roomkey") || urlParams.get("rk") || "");
+		session.roomBypassKey = roomBypassKey || false;
+		session.claimBypassKey = roomBypassKey || false;
+		if (!session.roomBypassKey) {
+			session.claimBypassKey = false;
+		}
+	}
+
+	if (urlParams.has("noclaim") || urlParams.has("noautoclaim") || urlParams.has("nonclaiming")) {
+		session.noRoomClaim = true;
+	} else if (urlParams.has("claim")) {
+		const claimValue = (urlParams.get("claim") || "").toLowerCase();
+		if (claimValue === "0" || claimValue === "false" || claimValue === "off" || claimValue === "no") {
+			session.noRoomClaim = true;
+		}
 	}
 
 	if (urlParams.has("secure")) {
@@ -6318,6 +7020,9 @@ async function main() {
 		session.approval_popup = true;
 		try { log("[flags] &approvepopup detected; approval_popup=true"); } catch (e) {}
 	}
+	if (urlParams.has("requireapproval")) {
+		session.requireServerApproval = true;
+	}
 	// do not reference stream ID before this point, as it might change after this point.
 
 	if (urlParams.has("push") || urlParams.has("id") || urlParams.has("permaid") || (session.sticky && session.decrypted)) {
@@ -6409,14 +7114,6 @@ async function main() {
 		}
 	}
 	
-	if (window.vdoAuth){
-		if (session.streamID) {
-		  await window.vdoAuth.assignStream();
-		}
-		getById("mainmenu").classList.remove("hidden2");
-		getById("header").classList.remove("hidden2");
-	}
-	
 	if (session.roomid || urlParams.has("roomid") || urlParams.has("r") || urlParams.has("room") || filename || session.permaid !== false) {
 		var roomid = "";
 		if (urlParams.has("room")) {
@@ -6452,6 +7149,11 @@ async function main() {
 			document.getElementById("webcamquality").elements.namedItem("resolution").value = session.quality_wb || 0;
 			document.getElementById("webcamquality3").elements.namedItem("resolution").value = session.quality_wb || 0;
 		} catch(e){}
+	}
+
+	if (window.vdoAuth){
+		getById("mainmenu").classList.remove("hidden2");
+		getById("header").classList.remove("hidden2");
 	}
 
 	if (session.permaid === false && session.roomid === false && session.view === false && session.effect === false && session.director === false) {
@@ -6603,7 +7305,40 @@ async function main() {
 		session.effect = "7";
 		if (urlParams.get("digitalzoom")){
 			session.effectValue_default = parseFloat(urlParams.get("digitalzoom")) || 1;
-		} 
+		}
+	} else if (urlParams.has("backgroundblur") || urlParams.has("bgblur")) {
+		session.effect = "3";
+		var backgroundBlurValue = urlParams.has("backgroundblur") ? urlParams.get("backgroundblur") : urlParams.get("bgblur");
+		if (backgroundBlurValue !== null && backgroundBlurValue !== ""){
+			backgroundBlurValue = parseFloat(backgroundBlurValue);
+			session.effectValue_default = isNaN(backgroundBlurValue) ? 2 : backgroundBlurValue;
+		}
+	} else if (urlParams.has("greenscreen")) {
+		session.effect = "4";
+	} else if (urlParams.has("virtualbackground") || urlParams.has("vbg")) {
+		session.effect = "5";
+	} else if (urlParams.has("transparentbg") || urlParams.has("transparentbackground")) {
+		session.effect = "16";
+	} else if (urlParams.has("facemesh")) {
+		session.effect = "6";
+	} else if (urlParams.has("chromakey")) {
+		session.effect = "14";
+		if (urlParams.get("chromakey")){
+			session.effectValue_default = parseFloat(urlParams.get("chromakey")) || 25;
+		}
+	} else if (urlParams.has("chromakeybg")) {
+		session.effect = "15";
+		if (urlParams.get("chromakeybg")){
+			session.effectValue_default = parseFloat(urlParams.get("chromakeybg")) || 25;
+		}
+	} else if (urlParams.has("facetracker") || urlParams.has("facetracking")) {
+		session.effect = "1";
+	} else if (urlParams.has("overlayfx")) {
+		session.effect = "overlay";
+	} else if (urlParams.has("anonymousmask") || urlParams.has("anonmask")) {
+		session.effect = "anon";
+	} else if (urlParams.has("dogface") || urlParams.has("dogears")) {
+		session.effect = "dog";
 	}
 
 	if (session.effect && !session.cleanOutput) {
@@ -6662,6 +7397,39 @@ async function main() {
 			session.wss = "wss://audience.vdo.ninja/listen/" + session.audience;
 		} else {
 			session.wss = "wss://audience.vdo.ninja/publish/" + session.audience;
+		}
+	}
+
+	// Scene-link-only WSS override. This lets directors generate scene links that
+	// use a different websocket than the director page. On scene/view pages it can
+	// become the active WSS, but only if normal &wss/&wss2 did not already win.
+	if (urlParams.has("scenewss2")) {
+		session.sceneWSS = urlParams.get("scenewss2") || "";
+		if (session.sceneWSS && !session.sceneWSS.startsWith("wss://")) {
+			session.sceneWSS = "wss://" + session.sceneWSS;
+		}
+		if (session.scene !== false && !session.wssSetViaUrl && session.sceneWSS) {
+			session.wss = session.sceneWSS;
+			session.wssSetViaUrl = true;
+		}
+	}
+
+	// invite.cam integration: &invitecam=<room>.<view-token> is an invite.cam-only
+	// shorthand for stable OBS scene links. Director pages may already use &wss2
+	// for their own control connection, but we still store session.invitecam so
+	// lib.js can preserve it in generated scene links. Do not fuck with this
+	// unless invite.cam director -> scene link -> OBS reload has been tested.
+	if (urlParams.has("invitecam") && typeof normalizeInviteCamValue === "function" && typeof getInviteCamWssFromValue === "function") {
+		session.invitecam = normalizeInviteCamValue(urlParams.get("invitecam"));
+		if (session.scene !== false && !session.wssSetViaUrl && session.invitecam) {
+			var inviteCamWss = getInviteCamWssFromValue(session.invitecam);
+			if (inviteCamWss) {
+				if (!inviteCamWss.startsWith("wss://")) {
+					inviteCamWss = "wss://" + inviteCamWss;
+				}
+				session.wss = inviteCamWss;
+				session.wssSetViaUrl = true;
+			}
 		}
 	}
 
@@ -6744,11 +7512,21 @@ async function main() {
 		// blur = 3
 		// green = 4
 		// image = 5
+		// transparent = 16
 	}
 
 	if (urlParams.has("effectvalue") || urlParams.has("ev")) {
 		session.effectValue = parseFloat(urlParams.get("effectvalue")) || parseFloat(urlParams.get("ev")) || 0;
 		session.effectValue_default = session.effectValue;
+	} else if (session.effect && session.effectValue_default === false) {
+		// No explicit value from URL; check for a saved preference for this session context
+		try {
+			var savedVal = await getSavedEffectValue(session.effect);
+			if (savedVal !== null) {
+				session.effectValue = savedVal;
+				session.effectValue_default = savedVal;
+			}
+		} catch(e){}
 	}
 
 	if (session.webcamonly == true) {
@@ -6977,8 +7755,33 @@ async function main() {
 				session.whepSrc = await promptAlt("Enter the WHEP source as a URL");
 			}
 			if (session.whepSrc) {
-				session.whipoutSettings = { type: "whep", url: session.whepSrc };
-				session.whipoutSettingsUserSet = true;
+				const normalizedWhepSrc = normalizeWhepShareUrl(session.whepSrc);
+				if (normalizedWhepSrc) {
+					const whepInput = getById("whepURL");
+					if (whepInput) {
+						whepInput.value = normalizedWhepSrc;
+					}
+					applyWhepShareSettings(normalizedWhepSrc);
+				} else {
+					warnUser(getTranslationOrFallback("invalid-whep-source-url", "Invalid WHEP source URL. Use https:// (or http://localhost for local testing)."), 7000);
+				}
+			}
+		} catch (e) {
+			errorlog(e);
+		}
+	}
+	if (urlParams.has("autowhep") && session.whipOutput && !session.whipoutSettingsUserSet && !(session.whipoutSettings && session.whipoutSettings.url)) {
+		try {
+			const autoWhepSrc = deriveAutoWhepShareUrl(session.whipOutput);
+			if (autoWhepSrc) {
+				const whepInput = getById("whepURL");
+				if (whepInput) {
+					whepInput.value = autoWhepSrc;
+				}
+				applyWhepShareSettings(autoWhepSrc);
+				log("AUTO WHEP SRC: " + autoWhepSrc);
+			} else {
+				warnlog("Unable to derive WHEP share URL from WHIP output URL.");
 			}
 		} catch (e) {
 			errorlog(e);
@@ -6988,7 +7791,7 @@ async function main() {
 		if (session.whipoutSettings) {
 			try {
 				session.whepSrcToken = urlParams.get("whepsharetoken") || urlParams.get("whepsrctoken") || null;
-				log("WHEP TOKEN: " + session.whepSrcToken);
+				log("WHEP TOKEN: [set]");
 				if (session.whepSrcToken) {
 					try {
 						session.whepSrcToken = decodeURIComponent(session.whepSrcToken);
@@ -7001,6 +7804,7 @@ async function main() {
 				if (session.whepSrcToken) {
 					session.whipoutSettings.token = session.whepSrcToken;
 					session.whipoutSettingsUserSet = true;
+					updateWhepShareStatus();
 				}
 			} catch (e) {
 				errorlog(e);
@@ -7291,6 +8095,20 @@ async function main() {
 	if (urlParams.has("waitimage")) {
 		session.waitImage = urlParams.get("waitimage") || false;
 	}
+	if ((urlParams.has("nosignal") || urlParams.has("nosignalpattern")) && !session.waitImage) {
+		var noSignalPattern = (urlParams.get("nosignalpattern") || urlParams.get("nosignal") || "1").toLowerCase();
+		if (!["0", "false", "off"].includes(noSignalPattern)) {
+			session.noSignalPattern = noSignalPattern;
+			if (["2", "clean", "plain", "unbranded"].includes(noSignalPattern)) {
+				session.waitImage = "./media/no-signal-clean.svg";
+			} else if (["3", "clock", "standby"].includes(noSignalPattern)) {
+				session.waitImage = "./media/no-signal-clock.svg";
+			} else {
+				session.waitImage = "./media/no-signal.svg";
+			}
+			session.waitImageTimeout = 0;
+		}
+	}
 
 	if ((((session.view!==false) || session.whepInput || session.whipView) && session.roomid === false) || (session.waitImage && session.scene !== false)) {
 		getById("container-4").className = "column columnfade";
@@ -7330,7 +8148,7 @@ async function main() {
 									this.style.display = "none";
 								};
 
-								if (session.cover) {
+								if (session.cover || session.noSignalPattern) {
 									getById("retryimage").style.objectFit = "cover";
 								}
 							} else if (!session.cleanOutput) {
@@ -7344,7 +8162,9 @@ async function main() {
 							if (urlParams.has("waitmessage")) {
 								getById("mainmenu").innerHTML += '<div id="retrymessage"></div>';
 								getById("retrymessage").innerText = urlParams.get("waitmessage");
-								getById("retrySpinner").title = urlParams.get("waitmessage");
+								if (getById("retrySpinner")) {
+									getById("retrySpinner").title = urlParams.get("waitmessage");
+								}
 							}
 						}
 					}
@@ -7421,8 +8241,17 @@ async function main() {
 		delayedStartupFuncs = [];
 	}, 50);
 
-	if (session.effect == "3" || session.effect == "4" || session.effect == "5") {
-		attemptTFLiteJsFileLoad();
+	if (session.effect == "3" || session.effect == "4" || session.effect == "5" || session.effect == "16") {
+		var canUseLongpipe =
+			typeof longpipeHandlesEffect === "function" &&
+			typeof loadLongpipe === "function" &&
+			longpipeHandlesEffect(session.effect);
+
+		if (canUseLongpipe) {
+			loadLongpipe();
+		} else {
+			attemptSegmentationEffectModelLoad();
+		}
 	} else if (session.effect == "6") {
 		loadTensorflowJS();
 	} else if (session.effect == "9") {
@@ -7543,20 +8372,77 @@ async function main() {
 	if (urlParams.has("flagship")) {
 		session.flagship = true;
 	}
+
+	if (urlParams.has("nomobilebitratecap")) {
+		session.noMobileBitrateCap = true;
+	}
 	//if (!session.flagship && session.mobile && (session.limitTotalBitrate===false)){
 	// session.limitTotalBitrate = session.totalRoomBitrate_default; // 500, with the max per guest stream out at maxMobileBitrate (350kbps) or 35-kbps if more than X in the room.
 	//}
 
 	if (urlParams.has("maxmobilebitrate")) {
-		session.maxMobileBitrate = parseInt(urlParams.has("maxmobilebitrate")) || 0;
+		var maxMobileBitrate = parseInt(urlParams.get("maxmobilebitrate")) || 0;
+		if (maxMobileBitrate > 0) {
+			session.maxMobileBitrate = maxMobileBitrate;
+		}
 	}
 	if (urlParams.has("lowmobilebitrate")) {
-		session.lowMobileBitrate = parseInt(urlParams.has("lowmobilebitrate")) || 0;
+		var lowMobileBitrate = parseInt(urlParams.get("lowmobilebitrate")) || 0;
+		if (lowMobileBitrate > 0) {
+			session.lowMobileBitrate = lowMobileBitrate;
+		}
 	}
 
 	//  Please contact steve on discord.vdo.ninja if you'd like this iFRAME tweaked, expanded, etc -- it's updated based on user request
 
-	session.remoteInterfaceAPI = function (e) {
+	function postIframeAPIResponse(key, value, cib = null) {
+		try {
+			var response = {};
+			response[key] = value;
+			response.cib = cib || null;
+			parent.postMessage(response, session.iframetarget);
+		} catch (e) {
+			errorlog(e);
+		}
+	}
+
+	function resolveIframeGuestTarget(data) {
+		var target = false;
+		if (data.UUID) {
+			target = data.UUID;
+		} else if ("target" in data) {
+			target = data.target;
+		} else if ("streamID" in data) {
+			target = data.streamID;
+		} else if ("value" in data) {
+			target = data.value;
+		}
+		var UUID = false;
+		if (target && session.rpcs && session.rpcs[target]) {
+			UUID = target;
+		}
+		if (!UUID && target && typeof resolveTargetGuestUUID === "function") {
+			UUID = resolveTargetGuestUUID(target);
+		}
+		if (!UUID && target && session.rpcs) {
+			for (var rpcUUID in session.rpcs) {
+				if (session.rpcs[rpcUUID] && session.rpcs[rpcUUID].streamID == target) {
+					UUID = rpcUUID;
+					break;
+				}
+			}
+		}
+		if (!UUID || !session.rpcs || !session.rpcs[UUID]) {
+			return false;
+		}
+		return {
+			UUID: UUID,
+			streamID: session.rpcs[UUID].streamID || false,
+			target: target
+		};
+	}
+
+	session.remoteInterfaceAPI = async function (e) {
 		// iFRAME api support
 		if (!e.data || typeof e.data !== "object") {
 			warnlog(e);
@@ -7579,9 +8465,218 @@ async function main() {
 				} else if (e.data.function === "publishScreen") {
 					ret = publishScreen();
 				} else if (e.data.function === "targetGuest") {
-					ret = targetGuest(data.target, data.action, data.value);
-				} else if (e.data.function === "commands" && data.action && Commands[data.action]) {
-					ret = Commands[data.action](data.value, data.value2 || null); 
+					ret = targetGuest(e.data.target, e.data.action, e.data.value, ("value2" in e.data) ? e.data.value2 : null);
+				} else if (e.data.function === "getGuestMediaDevices") {
+					var guestTarget = resolveIframeGuestTarget(e.data);
+					if (!guestTarget) {
+						postIframeAPIResponse(
+							"guestMediaDevices",
+							{
+								ok: false,
+								error: "Guest not found",
+								target: e.data.target || e.data.streamID || e.data.UUID || false
+							},
+							e.data.cib || null
+						);
+						return;
+					}
+					session.iframeMediaDeviceRequests = session.iframeMediaDeviceRequests || {};
+					if (session.iframeMediaDeviceRequests[guestTarget.UUID] && session.iframeMediaDeviceRequests[guestTarget.UUID].timer) {
+						clearTimeout(session.iframeMediaDeviceRequests[guestTarget.UUID].timer);
+					}
+					session.iframeMediaDeviceRequests[guestTarget.UUID] = {
+						cib: e.data.cib || null,
+						target: e.data.target || guestTarget.streamID || guestTarget.UUID,
+						streamID: guestTarget.streamID,
+						timer: setTimeout(function (UUID) {
+							var request = session.iframeMediaDeviceRequests && session.iframeMediaDeviceRequests[UUID];
+							if (!request) {
+								return;
+							}
+							delete session.iframeMediaDeviceRequests[UUID];
+							postIframeAPIResponse(
+								"guestMediaDevices",
+								{
+									ok: false,
+									error: "Timed out waiting for guest devices",
+									target: request.target || false,
+									UUID: UUID,
+									streamID: request.streamID || false,
+									devices: []
+								},
+								request.cib || null
+							);
+						}, 5500, guestTarget.UUID)
+					};
+					var sentDeviceRequest = session.sendRequest({ getAudioSettings: true, getVideoSettings: true }, guestTarget.UUID);
+					if (!sentDeviceRequest) {
+						clearTimeout(session.iframeMediaDeviceRequests[guestTarget.UUID].timer);
+						delete session.iframeMediaDeviceRequests[guestTarget.UUID];
+						postIframeAPIResponse(
+							"guestMediaDevices",
+							{
+								ok: false,
+								error: "Unable to request guest devices",
+								target: e.data.target || guestTarget.streamID || guestTarget.UUID,
+								UUID: guestTarget.UUID,
+								streamID: guestTarget.streamID || false,
+								devices: []
+							},
+							e.data.cib || null
+						);
+					}
+					return;
+				} else if (e.data.function === "setGuestMediaDevice") {
+					var guestDeviceTarget = resolveIframeGuestTarget(e.data);
+					if (!guestDeviceTarget) {
+						postIframeAPIResponse(
+							"guestMediaDeviceChange",
+							{
+								ok: false,
+								error: "Guest not found",
+								target: e.data.target || e.data.streamID || e.data.UUID || false
+							},
+							e.data.cib || null
+						);
+						return;
+					}
+					var kind = String(e.data.kind || e.data.deviceKind || "").toLowerCase();
+					var deviceId = "deviceId" in e.data ? e.data.deviceId : e.data.value;
+					var request = { UUID: guestDeviceTarget.UUID };
+					var normalizedKind = false;
+					if (kind === "camera" || kind === "video" || kind === "videoinput") {
+						request.changeCamera = deviceId;
+						normalizedKind = "camera";
+					} else if (kind === "microphone" || kind === "mic" || kind === "audio" || kind === "audioinput") {
+						request.changeMicrophone = deviceId;
+						normalizedKind = "microphone";
+					} else if (kind === "speaker" || kind === "output" || kind === "audiooutput") {
+						request.changeSpeaker = deviceId;
+						normalizedKind = "speaker";
+					}
+					if (!normalizedKind || typeof deviceId === "undefined") {
+						postIframeAPIResponse(
+							"guestMediaDeviceChange",
+							{
+								ok: false,
+								error: "Missing device kind or ID",
+								target: e.data.target || guestDeviceTarget.streamID || guestDeviceTarget.UUID,
+								UUID: guestDeviceTarget.UUID,
+								streamID: guestDeviceTarget.streamID || false
+							},
+							e.data.cib || null
+						);
+						return;
+					}
+					session.iframeMediaDeviceChangeRequests = session.iframeMediaDeviceChangeRequests || {};
+					var deviceChangeKey = guestDeviceTarget.UUID + ":" + normalizedKind;
+					if (session.iframeMediaDeviceChangeRequests[deviceChangeKey] && session.iframeMediaDeviceChangeRequests[deviceChangeKey].timer) {
+						clearTimeout(session.iframeMediaDeviceChangeRequests[deviceChangeKey].timer);
+					}
+					session.iframeMediaDeviceChangeRequests[deviceChangeKey] = {
+						cib: e.data.cib || null,
+						target: e.data.target || guestDeviceTarget.streamID || guestDeviceTarget.UUID,
+						streamID: guestDeviceTarget.streamID,
+						kind: normalizedKind,
+						deviceId: deviceId,
+						timer: setTimeout(function (changeKey) {
+							var request = session.iframeMediaDeviceChangeRequests && session.iframeMediaDeviceChangeRequests[changeKey];
+							if (!request) {
+								return;
+							}
+							delete session.iframeMediaDeviceChangeRequests[changeKey];
+							postIframeAPIResponse(
+								"guestMediaDeviceChange",
+								{
+									ok: false,
+									error: "Timed out waiting for guest device change",
+									target: request.target || false,
+									UUID: guestDeviceTarget.UUID,
+									streamID: request.streamID || false,
+									kind: request.kind,
+									deviceId: request.deviceId
+								},
+								request.cib || null
+							);
+						}, 8500, deviceChangeKey)
+					};
+					var sentChangeRequest = session.sendRequest(request, guestDeviceTarget.UUID);
+					if (!sentChangeRequest) {
+						clearTimeout(session.iframeMediaDeviceChangeRequests[deviceChangeKey].timer);
+						delete session.iframeMediaDeviceChangeRequests[deviceChangeKey];
+						postIframeAPIResponse(
+							"guestMediaDeviceChange",
+							{
+								ok: false,
+								error: "Unable to send device change",
+								target: e.data.target || guestDeviceTarget.streamID || guestDeviceTarget.UUID,
+								UUID: guestDeviceTarget.UUID,
+								streamID: guestDeviceTarget.streamID || false,
+								kind: normalizedKind,
+								deviceId: deviceId
+							},
+							e.data.cib || null
+						);
+					}
+					return;
+				} else if (e.data.function === "activateQueuedGuest") {
+					var queuedGuestTarget = resolveIframeGuestTarget(e.data);
+					if (!queuedGuestTarget) {
+						postIframeAPIResponse(
+							"queuedGuestActivation",
+							{
+								ok: false,
+								error: "Guest not found",
+								target: e.data.target || e.data.streamID || e.data.UUID || false
+							},
+							e.data.cib || null
+						);
+						return;
+					}
+					var safeQueuedUUID = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(queuedGuestTarget.UUID) : queuedGuestTarget.UUID;
+					var queueButton = document.querySelector('[data-action-type="remove-queue"][data--u-u-i-d="' + safeQueuedUUID + '"]');
+					if (queueButton && queueButton.classList && queueButton.classList.contains("hidden")) {
+						postIframeAPIResponse(
+							"queuedGuestActivation",
+							{
+								ok: false,
+								error: "Guest is not queued",
+								target: e.data.target || queuedGuestTarget.streamID || queuedGuestTarget.UUID,
+								UUID: queuedGuestTarget.UUID,
+								streamID: queuedGuestTarget.streamID || false
+							},
+							e.data.cib || null
+						);
+						return;
+					}
+					if (queueButton && typeof remoteRemoveQueue === "function") {
+						remoteRemoveQueue(queueButton);
+						postIframeAPIResponse(
+							"queuedGuestActivation",
+							{
+								ok: true,
+								target: e.data.target || queuedGuestTarget.streamID || queuedGuestTarget.UUID,
+								UUID: queuedGuestTarget.UUID,
+								streamID: queuedGuestTarget.streamID || false
+							},
+							e.data.cib || null
+						);
+					} else {
+						postIframeAPIResponse(
+							"queuedGuestActivation",
+							{
+								ok: false,
+								error: "Activate button not found",
+								target: e.data.target || queuedGuestTarget.streamID || queuedGuestTarget.UUID,
+								UUID: queuedGuestTarget.UUID,
+								streamID: queuedGuestTarget.streamID || false
+							},
+							e.data.cib || null
+						);
+					}
+					return;
+				} else if (e.data.function === "commands" && e.data.action && Commands[e.data.action]) {
+					ret = Commands[e.data.action](e.data.value, ("value2" in e.data) ? e.data.value2 : null);
 				} else if (e.data.function === "routeMessage") {
 					try {
 						session.ws.onmessage({ data: e.data.value });
@@ -7762,8 +8857,9 @@ async function main() {
 		
 		if (e.data.getSnapshotBySlot || e.data.getSnapshotByStreamID) {
 		  let videoElement = false;
+		  const currentSlotsForSnapshot = session.currentSlots || {};
 		  
-		  let streamID = ("getSnapshotBySlot" in e.data) ? session.currentSlots[parseInt(e.data.getSnapshotBySlot) || 0] : e.data.getSnapshotByStreamID;
+		  let streamID = ("getSnapshotBySlot" in e.data) ? currentSlotsForSnapshot[parseInt(e.data.getSnapshotBySlot) || 0] : e.data.getSnapshotByStreamID;
 		  
 		  let UUID = false;
 		  if (streamID){
@@ -7774,54 +8870,104 @@ async function main() {
 				  break;
 				}
 			  }
+			  if (!videoElement && session.streamID) {
+				if (streamID == session.streamID && session.videoElement) {
+				  UUID = session.UUID || "local";
+				  videoElement = session.videoElement;
+				} else if ((streamID == session.streamID + ":s" || streamID == session.streamID + ":screen") && (session.screenShareElement || session.screenShareState)) {
+				  UUID = (session.UUID || "local") + "_screen";
+				  videoElement = session.screenShareElement || session.videoElement;
+				}
+			  }
 		  }
 		  
 		  if (streamID && videoElement && videoElement.srcObject) {
 			const videoTrack = videoElement.srcObject.getVideoTracks()[0];
 			
 			if (videoTrack) {
-			  const processor = new MediaStreamTrackProcessor({ track: videoTrack });
-			  const reader = processor.readable.getReader();
+			  const format = typeof session.sendframes === "string" ? session.sendframes : "png";
+			  const currentSlots = session.currentSlots || {};
+			  const slot = parseInt(Object.keys(currentSlots).find(key => currentSlots[key] === streamID)) || 0;
+			  const postFrame = function(imageData) {
+				parent.postMessage({
+				  type: 'frame',
+				  frame: imageData,
+				  UUID: UUID,
+				  streamID: streamID,
+				  trackID: videoTrack.id,
+				  kind: videoTrack.kind,
+				  format: format,
+				  slot: slot,
+				  cib: e.data.cib || null
+				}, session.iframetarget);
+			  };
+			  const drawVideoElementFrame = function() {
+				const width = videoElement.videoWidth || videoElement.clientWidth || 320;
+				const height = videoElement.videoHeight || videoElement.clientHeight || 180;
+				if (!width || !height) {
+				  return false;
+				}
+				try {
+				  const fallbackCanvas = document.createElement("canvas");
+				  const fallbackCtx = fallbackCanvas.getContext("2d", { willReadFrequently: true });
+				  fallbackCanvas.width = width;
+				  fallbackCanvas.height = height;
+				  fallbackCtx.drawImage(videoElement, 0, 0, width, height);
+				  postFrame(fallbackCanvas.toDataURL(`image/${format}`, 0.8));
+				  return true;
+				} catch (error) {
+				  console.error("Error drawing fallback video frame:", error);
+				  return false;
+				}
+			  };
 			  
-			  const canvas = document.createElement("canvas");
-			  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-			  
-			  try {
-				reader.read().then(({ done, value: frame }) => {
-				  if (!done && frame) {
-					canvas.width = frame.displayWidth;
-					canvas.height = frame.displayHeight;
-					ctx.drawImage(frame, 0, 0);
-					
-					const format = typeof session.sendframes === "string" ? session.sendframes : "png";
-					const imageData = canvas.toDataURL(`image/${format}`, 0.8);
-					
-					parent.postMessage({
-					  type: 'frame',
-					  frame: imageData,
-					  UUID: UUID,
-					  streamID: streamID,
-					  trackID: videoTrack.id,
-					  kind: videoTrack.kind,
-					  format: format,
-					  slot: parseInt(Object.keys(session.currentSlots).find(key => session.currentSlots[key] === streamID)) || 0,
-					  cib: e.data.cib || null
-					}, session.iframetarget);
-					
-					// Proper cleanup
-					frame.close();
-					reader.cancel();
-					
-					// Remove canvas from DOM if it was added
+			  if (typeof MediaStreamTrackProcessor === "function") {
+				try {
+				  const processor = new MediaStreamTrackProcessor({ track: videoTrack });
+				  const reader = processor.readable.getReader();
+				  const canvas = document.createElement("canvas");
+				  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+				  let frameSent = false;
+				  const fallbackTimer = setTimeout(function() {
+					if (!frameSent) {
+					  frameSent = drawVideoElementFrame();
+					}
+				  }, 800);
+
+				  reader.read().then(({ done, value: frame }) => {
+					if (!done && frame) {
+					  clearTimeout(fallbackTimer);
+					  canvas.width = frame.displayWidth;
+					  canvas.height = frame.displayHeight;
+					  ctx.drawImage(frame, 0, 0);
+					  if (!frameSent) {
+						postFrame(canvas.toDataURL(`image/${format}`, 0.8));
+						frameSent = true;
+					  }
+					  frame.close();
+					  reader.cancel();
+					} else {
+					  clearTimeout(fallbackTimer);
+					  if (!frameSent) {
+						frameSent = drawVideoElementFrame();
+					  }
+					}
 					if (canvas.parentNode) {
 					  canvas.parentNode.removeChild(canvas);
 					}
-				  }
-				}).catch(error => {
-				  console.error("Error processing image frame:", error);
-				});
-			  } catch (error) {
-				console.error("Error setting up frame capture:", error);
+				  }).catch(error => {
+					clearTimeout(fallbackTimer);
+					console.error("Error processing image frame:", error);
+					if (!frameSent) {
+					  frameSent = drawVideoElementFrame();
+					}
+				  });
+				} catch (error) {
+				  console.error("Error setting up frame capture:", error);
+				  drawVideoElementFrame();
+				}
+			  } else {
+				drawVideoElementFrame();
 			  }
 			}
 		  }
@@ -8048,6 +9194,7 @@ async function main() {
 		if ("audiobitrate" in e.data) {
 			// changes the audio bitrate of a specific or all inbound media tracks. kbps
 			var lock = true;
+			var audioBitrate = parseInt(e.data.audiobitrate);
 			if ("lock" in e.data) {
 				// since this is the iframe API, we're going to assume the default is manual over-ride. VDO.Ninja's automixer logic won't override a locked bitrate.
 				lock = e.data.lock;
@@ -8059,17 +9206,17 @@ async function main() {
 						if ("target" in e.data) {
 							if (session.rpcs[i].streamID == e.data.target || e.data.target == "*") {
 								// specify a stream ID or let it apply to all videos
-								session.requestAudioRateLimit(parseInt(e.data.bitrate), i, lock);
+								session.requestAudioRateLimit(audioBitrate, i, lock);
 							}
 						} else if (e.data.UUID && e.data.UUID === i) {
-							session.requestAudioRateLimit(parseInt(e.data.bitrate), i, lock);
+							session.requestAudioRateLimit(audioBitrate, i, lock);
 						} else if (e.data.streamID) {
 							if (session.rpcs[i].streamID == e.data.streamID) {
 								// specify a stream ID or let it apply to all videos
-								session.requestAudioRateLimit(parseInt(e.data.bitrate), i, lock);
+								session.requestAudioRateLimit(audioBitrate, i, lock);
 							}
 						} else {
-							session.requestAudioRateLimit(parseInt(e.data.bitrate), i, lock); // bitrate = 0 pauses the video
+							session.requestAudioRateLimit(audioBitrate, i, lock); // bitrate = 0 pauses the audio
 						}
 					}
 				} catch (e) {
@@ -8307,14 +9454,20 @@ async function main() {
 
 		if ("getLoudness" in e.data) {
 			log("GOT LOUDNESS REQUEST");
-			if (e.data.getLoudness == true) {
-				if (!session.pushLoudness && session.audioEffects !== true) {
+				if (e.data.getLoudness == true) {
 					session.pushLoudness = true;
-					for (var i in session.rpcs) {
+					if ("cib" in e.data) {
+						session.pushLoudnessCIB = e.data.cib || null;
+					} else {
+						session.pushLoudnessCIB = null;
+					}
+
+				for (var i in session.rpcs) {
+					if (typeof ensureLoudnessPipeline === "function") {
+						ensureLoudnessPipeline(i, "getLoudness");
+					} else if (session.audioEffects !== true) {
 						updateIncomingAudioElement(i); // this can be called when turning on/off inbound audio processing.
 					}
-				} else {
-					session.pushLoudness = true;
 				}
 
 				var loudness = {};
@@ -8322,14 +9475,21 @@ async function main() {
 					loudness[session.rpcs[i].streamID] = session.rpcs[i].stats.Audio_Loudness;
 				}
 
+				var loudnessSnapshot = {
+					action: "loudness",
+					mode: "snapshot",
+					loudness: loudness
+				};
+					if ("cib" in e.data) {
+						loudnessSnapshot.cib = e.data.cib || null;
+					}
+
 				parent.postMessage(
-					{
-						loudness: loudness,
-						cib: e.data.cib || null
-					},
+					loudnessSnapshot,
 					session.iframetarget
 				);
 			} else {
+				session.pushLoudnessCIB = null;
 				if (session.pushLoudness && !session.audioEffects) {
 					// turn off audio processing
 					session.pushLoudness = false;
@@ -8750,10 +9910,33 @@ async function main() {
 
 		if ("action" in e.data && e.data.action != "null") {
 			///////////////  reuse the Companion API
-			var resp = processMessage(e.data); // reuse the companion API
-			if (resp !== null) {
-				log(resp);
-				parent.postMessage(resp, session.iframetarget, null, null, e.data.cib);
+			try {
+				var resp = await processMessage(e.data); // reuse the companion API
+				if (resp !== null) {
+					if (typeof e.data.cib !== "undefined") {
+						if (resp && typeof resp === "object" && !Array.isArray(resp)) {
+							resp.cib = e.data.cib;
+						} else {
+							resp = { action: e.data.action || null, result: resp, cib: e.data.cib };
+						}
+					}
+					log(resp);
+					parent.postMessage(resp, session.iframetarget);
+				}
+			} catch (err) {
+				errorlog(err);
+				if (typeof e.data.cib !== "undefined") {
+					parent.postMessage(
+						{
+							action: e.data.action || null,
+							error: true,
+							result: false,
+							message: err && err.message ? err.message : "processMessage failed",
+							cib: e.data.cib
+						},
+						session.iframetarget
+					);
+				}
 			}
 		} else if ("target" in e.data) {
 			log(e.data);
@@ -9471,6 +10654,9 @@ async function main() {
 			} catch (e) {
 				errorlog(e);
 			}
+			try {
+				downloadSessionLog();
+			} catch (e) {}
 		});
 
 		var script = document.createElement("script");
