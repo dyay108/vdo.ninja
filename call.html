@@ -1382,7 +1382,7 @@ function leave() {
 	if (pollTimer) { clearInterval(pollTimer); }
 	// Back to the prejoin card, with the room prefilled so rejoining is one
 	// click. A full reload is the surest way to drop the media devices.
-	var url = new URL(window.location.href);
+	var url = wrapperURL();
 	url.searchParams.set("room", state.room);
 	if (state.name) { url.searchParams.set("name", state.name); }
 	setTimeout(function () { window.location.replace(url.href); }, 250);
@@ -1402,9 +1402,22 @@ function toast(text) {
 	toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2200);
 }
 
+/* Where the wrapper lives, for any link it generates about itself.
+ *
+ * Deliberately NOT window.location.href. When this page is also served at the
+ * bare root, "/?room=xyz" is not ours to take - VDO.Ninja's own entry points
+ * are query strings on "/" (?director=, ?view=, ?push=, ?scene=, ?room=), and
+ * the nginx config hands any query-carrying root request to index.html.
+ * Building links against /call keeps them unambiguous under either
+ * deployment. */
+var WRAPPER_PATH = "/call";
+
+function wrapperURL() {
+	return new URL(WRAPPER_PATH, window.location.origin);
+}
+
 function inviteURL() {
-	var url = new URL(window.location.href);
-	url.search = "";
+	var url = wrapperURL();
 	url.searchParams.set("room", state.room);
 	if (state.password) { url.searchParams.set("password", state.password); }
 	return url.href;

@@ -29,6 +29,22 @@ map $uri $vdo_cache_control {
     ~*\.(?:mp3|mp4|webm|ogg|wav|m4a)$           "public, max-age=2592000";
 }
 
+# Which page the bare root serves.
+#
+# VDO.Ninja's main entry points are query strings on "/" rather than distinct
+# paths - ?director=, ?view=, ?push=, ?scene=, ?room=. Serving the wrapper at
+# "/" unconditionally would shadow every one of them, which among other things
+# breaks OBS browser sources.
+#
+# So: a root request with no query at all is someone opening the site, and
+# gets the conferencing wrapper. A root request carrying any query is a stock
+# VDO.Ninja link and is left alone. The wrapper's own links use /call for that
+# reason - see inviteURL() in call.html.
+map $is_args $vdo_root_page {
+    ""      /call.html;
+    default /index.html;
+}
+
 server {
     listen      ${VDO_PORT};
     listen      [::]:${VDO_PORT};
@@ -100,23 +116,20 @@ server {
         return 200   "ok\n";
     }
 
-    # Serve the conferencing wrapper at the root instead of the stock
-    # VDO.Ninja landing page.
+    # Serve the conferencing wrapper at the bare root instead of the stock
+    # VDO.Ninja landing page. $vdo_root_page (mapped above) keeps every
+    # query-carrying root URL on index.html so the core entry points survive.
     #
-    # `location = /` is an exact match, so it catches only the bare root and
-    # never the assets - /main.js, /lib.js and /call-theme.css all still fall
-    # through to `location /` below. Doing the same thing in a reverse proxy
-    # by rewriting the path prefix would catch those too and break them.
+    # `location = /` is an exact match, so it catches only the root and never
+    # the assets - /main.js, /lib.js and /call-theme.css all still fall
+    # through to `location /` below. Doing this in a reverse proxy by
+    # rewriting the path prefix would catch those too and break them.
     #
-    # Rewriting rather than redirecting keeps the URL at "/", which matters
-    # because the wrapper builds its invite links from window.location - a
-    # redirect would make every shared link carry the /call path. Query
-    # strings are unaffected by location matching, so /?room=xyz still lands
-    # here and still reaches the page with its query intact.
+    # Rewriting rather than redirecting keeps the URL at "/".
     #
-    # The stock landing page is still reachable at /index.
+    # The stock landing page also stays reachable explicitly at /index.
     location = / {
-        try_files /call.html =404;
+        try_files $vdo_root_page =404;
     }
 
     # Two-segment paths such as /obs/simple, /examples/control, /whip/index.

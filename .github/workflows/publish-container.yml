@@ -9,6 +9,9 @@ on:
     # No path filter on purpose: nearly every file in the repo is served by
     # the image, including the .md docs, so any push to develop is a real
     # content change. Layer caching keeps the rebuild cheap.
+  # PRs build (never push) to verify the image still works. The filter lists
+  # what the smoke test actually asserts about, so a PR touching any of it
+  # gets checked before merge.
   pull_request:
     branches:
       - develop
@@ -17,6 +20,12 @@ on:
       - ".dockerignore"
       - "docker/**"
       - ".github/workflows/publish-container.yml"
+      # The conferencing wrapper. Its routing is asserted by the smoke test -
+      # call.html supplies the #prejoin marker used to tell it apart from the
+      # stock landing page, and call-theme.css must stay reachable or the UI
+      # loads unstyled with nothing else to signal it.
+      - "call.html"
+      - "call-theme.css"
   workflow_dispatch:
 
 permissions:
@@ -104,14 +113,48 @@ jobs:
             echo "ok   :$1$2 -> $code"
           }
 
+          # Which of the two pages a URL actually returns. A status code cannot
+          # tell these apart - both are 200 - so match on a marker unique to
+          # each: #prejoin exists only in call.html, #gridlayout only in
+          # index.html.
+          serves() { # $1 = host port, $2 = path, $3 = wrapper|vdoninja
+            body=$(curl -s "http://127.0.0.1:$1$2")
+            if printf '%s' "$body" | grep -q 'id="prejoin"'; then
+              got=wrapper
+            elif printf '%s' "$body" | grep -q 'id="gridlayout"'; then
+              got=vdoninja
+            else
+              got=neither
+            fi
+            if [ "$got" != "$3" ]; then
+              echo "FAIL $2 served '$got' (expected '$3')"; return 1
+            fi
+            echo "ok   :$1$2 -> $got"
+          }
+
           echo "--- default port ---"
           docker run -d --name vdo-default -p 18080:8080 vdo-ninja:smoke
           wait_up 18080 vdo-default
           for spec in "/ 200" "/healthz 200" "/mixer 200" "/obs/simple 200" \
-                      "/main.js 200" "/mixer.html 302"; do
+                      "/main.js 200" "/mixer.html 302" \
+                      "/call 200" "/call.html 302" "/call-theme.css 200"; do
             # shellcheck disable=SC2086
             set -- $spec
             check 18080 "$1" "$2" || { docker logs vdo-default; exit 1; }
+          done
+
+          # Root routing. The conferencing wrapper owns the bare root, but
+          # VDO.Ninja's own entry points are query strings on "/" rather than
+          # distinct paths - ?director=, ?view=, ?push=, ?scene=, ?room=.
+          # Serving the wrapper for those would shadow them and silently break
+          # OBS browser sources, and every one of these still answers 200, so
+          # only a content check catches it.
+          echo "--- root routing ---"
+          for spec in "/|wrapper" "/call|wrapper" "/call?room=x|wrapper" \
+                      "/index|vdoninja" "/?director=studio|vdoninja" \
+                      "/?view=abc|vdoninja" "/?push=abc|vdoninja" \
+                      "/?scene=1&room=x|vdoninja" "/?room=x|vdoninja"; do
+            serves 18080 "${spec%%|*}" "${spec##*|}" || { docker logs vdo-default; exit 1; }
           done
 
           # gzip_static must serve the prebuilt .gz sibling
