@@ -140,7 +140,73 @@ server {
 
 Whatever proxy you use, **do not add `X-Frame-Options` or a
 `Content-Security-Policy`**. Both break core features — see the notes in
-`docker/default.conf`.
+`docker/default.conf.template`.
+
+---
+
+## Changing the port
+
+There are two ports, and they are not the same thing.
+
+### The host port (what you usually want)
+
+The port on your Docker host that the proxy connects to. No rebuild needed.
+Create a `.env` file next to `docker-compose.yml`:
+
+```sh
+VDO_HTTP_PORT=9000
+```
+
+Then `docker compose up -d`. Confirm with `docker compose port vdo-ninja 8080`.
+
+Or edit the **left** side of `docker-compose.yml` directly — `"9000:8080"`. The
+right side is the container's port and should stay as-is.
+
+### The container port
+
+The port nginx listens on inside the container. Also an environment variable —
+no rebuild, no file edits. In your `.env`:
+
+```sh
+VDO_PORT=9090
+VDO_HTTP_PORT=9090
+```
+
+Set both unless you want the two sides to differ; `docker-compose.yml` maps
+`${VDO_HTTP_PORT}:${VDO_PORT}`. With plain `docker run`:
+
+```sh
+docker run -d -e VDO_PORT=9090 -p 9090:9090 ghcr.io/dyay108/vdo.ninja:latest
+```
+
+The nginx config ships as an `envsubst` template
+(`docker/default.conf.template`) that the base image's entrypoint renders into
+`/etc/nginx/conf.d/default.conf` at startup. `NGINX_ENVSUBST_FILTER=^VDO_`
+limits substitution to our own variables, so nginx's `$uri`, `$request_uri` and
+capture groups pass through untouched. The healthcheck reads `${VDO_PORT}` at
+run time too, so it follows automatically.
+
+**It must be between 1025 and 65535.** nginx runs as UID 101 here and an
+unprivileged process cannot bind a privileged port. Rather than let that
+surface as a bare `bind() ... Permission denied`, the container refuses to
+start and tells you why:
+
+```
+10-check-vdo-port.sh: ERROR: VDO_PORT must be between 1025 and 65535, got '80'
+```
+
+To serve on 80 or 443, map it on the host side — `ports: ["80:8080"]` — or let
+your reverse proxy do it. Never inside the container.
+
+Two caveats:
+
+- **`EXPOSE` still says 8080.** It is build-time metadata that Docker cannot
+  re-evaluate at run time. Harmless as long as you pass an explicit `-p`
+  mapping, which `docker-compose.yml` does.
+- **A read-only root filesystem needs a tmpfs on `/etc/nginx/conf.d`.** The
+  entrypoint renders the template into that directory. It is already in
+  `docker-compose.yml`; if you remove it, the container stops with an error
+  rather than silently serving the wrong thing.
 
 ---
 

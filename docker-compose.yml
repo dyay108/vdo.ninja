@@ -17,12 +17,25 @@ services:
     # Plain HTTP. Your reverse proxy terminates TLS in front of this.
     # VDO.Ninja will not get camera/mic access over plain http:// from
     # anything but localhost, so this port is not meant to be used directly.
+    #
+    # Both sides are configurable from a .env file next to this one:
+    #   VDO_HTTP_PORT  port published on the Docker host
+    #   VDO_PORT       port nginx listens on inside the container (>1024)
+    # Setting only VDO_HTTP_PORT is the common case.
     ports:
-      - "8080:8080"
+      - "${VDO_HTTP_PORT:-8080}:${VDO_PORT:-8080}"
+
+    environment:
+      VDO_PORT: ${VDO_PORT:-8080}
 
     # The image is static content only; nothing needs to write to disk.
     read_only: true
     tmpfs:
+      # /etc/nginx/conf.d is required, not just hardening: the entrypoint
+      # renders the config template into it at startup and cannot write to a
+      # read-only filesystem. Removing it stops the container with an error
+      # from 10-check-vdo-port.sh.
+      - /etc/nginx/conf.d
       - /tmp
       - /var/cache/nginx
     security_opt:
@@ -43,7 +56,7 @@ services:
     #   - "traefik.http.routers.vdo.rule=Host(`vdo.example.com`)"
     #   - "traefik.http.routers.vdo.entrypoints=websecure"
     #   - "traefik.http.routers.vdo.tls.certresolver=letsencrypt"
-    #   - "traefik.http.services.vdo.loadbalancer.server.port=8080"
+    #   - "traefik.http.services.vdo.loadbalancer.server.port=${VDO_PORT:-8080}"
     # networks:
     #   - proxy
 

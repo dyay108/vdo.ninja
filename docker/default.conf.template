@@ -1,9 +1,13 @@
 # ---------------------------------------------------------------------------
-# VDO.Ninja - nginx site config
+# VDO.Ninja - nginx site config (envsubst template)
 #
-# Serves the static client on port 8080 as a non-root user. TLS, HTTP/2 and
-# the public hostname are all handled by the reverse proxy in front of this
-# container.
+# Rendered to /etc/nginx/conf.d/default.conf at container start by the base
+# image's 20-envsubst-on-templates.sh. Only ${VDO_PORT} is substituted -
+# NGINX_ENVSUBST_FILTER is set to ^VDO_ in the Dockerfile so that nginx's own
+# runtime variables ($uri, $request_uri, $1 ...) are left untouched.
+#
+# Serves the static client as a non-root user. TLS, HTTP/2 and the public
+# hostname are all handled by the reverse proxy in front of this container.
 #
 # Routing rules follow upstream's install.md so that extensionless URLs
 # (/mixer, /obs/simple) resolve the same way they do on vdo.ninja.
@@ -26,8 +30,8 @@ map $uri $vdo_cache_control {
 }
 
 server {
-    listen      8080;
-    listen      [::]:8080;
+    listen      ${VDO_PORT};
+    listen      [::]:${VDO_PORT};
     server_name _;
 
     root  /usr/share/nginx/html;
@@ -35,8 +39,8 @@ server {
 
     # The proxy in front of us owns the scheme, host and port. Without these,
     # the /foo.html -> /foo redirect below would go out as
-    # "http://<container-id>:8080/foo" and leak the internal port to the
-    # browser, which then fails to resolve it.
+    # "http://<container-id>:${VDO_PORT}/foo" and leak the internal port to
+    # the browser, which then fails to resolve it.
     absolute_redirect off;
     port_in_redirect  off;
 

@@ -46,10 +46,32 @@ LABEL org.opencontainers.image.title="VDO.Ninja" \
       org.opencontainers.image.source="https://github.com/dyay108/vdo.ninja" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
-COPY docker/default.conf /etc/nginx/conf.d/default.conf
+# Listening port, overridable at run time with -e VDO_PORT=9090. The config is
+# shipped as a template and rendered by the base image's entrypoint on start.
+# Must stay above 1024: this image runs as UID 101 and cannot bind a
+# privileged port. 10-check-vdo-port.sh enforces that with a clear message.
+ENV VDO_PORT=8080
+
+# Restrict envsubst to our own variables so nginx's $uri, $request_uri, $1 and
+# friends survive templating untouched.
+ENV NGINX_ENVSUBST_FILTER=^VDO_
+
+COPY docker/default.conf.template /etc/nginx/templates/default.conf.template
+
+# --chmod is required, not cosmetic: the base entrypoint silently skips any
+# script in /docker-entrypoint.d that lacks the exec bit. Using COPY --chmod
+# rather than a RUN keeps this stage free of executable steps, so multi-arch
+# builds need no QEMU emulation.
+COPY --chmod=0755 docker/docker-entrypoint.d/10-check-vdo-port.sh \
+     /docker-entrypoint.d/10-check-vdo-port.sh
+
 COPY --from=assets /site /usr/share/nginx/html
 
+# Build-time metadata only; reflects the default. Docker cannot re-evaluate
+# this when VDO_PORT is overridden at run time, so publish with an explicit
+# -p mapping rather than relying on EXPOSE.
 EXPOSE 8080
 
+# Shell form on purpose: ${VDO_PORT} has to expand at run time, not build time.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -qO /dev/null http://127.0.0.1:8080/healthz || exit 1
+    CMD wget -qO /dev/null "http://127.0.0.1:${VDO_PORT}/healthz" || exit 1

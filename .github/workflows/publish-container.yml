@@ -88,31 +88,55 @@ jobs:
           set -euo pipefail
           docker buildx build --load --platform linux/amd64 \
             --cache-from type=gha -t vdo-ninja:smoke .
-          docker run -d --name vdo-smoke -p 18080:8080 vdo-ninja:smoke
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then break; fi
-            if [ "$i" = "30" ]; then echo "container never became healthy"; docker logs vdo-smoke; exit 1; fi
-            sleep 1
-          done
-
-          check() {
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080$1")
-            if [ "$code" != "$2" ]; then
-              echo "FAIL $1 -> $code (expected $2)"; docker logs vdo-smoke; exit 1
-            fi
-            echo "ok   $1 -> $code"
+          wait_up() { # $1 = host port, $2 = container name
+            for _ in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:$1/healthz" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            echo "FAIL: $2 never became healthy on port $1"; docker logs "$2"; return 1
           }
 
-          check /            200
-          check /healthz     200
-          check /mixer       200
-          check /obs/simple  200
-          check /main.js     200
-          check /mixer.html  302
+          check() { # $1 = host port, $2 = path, $3 = expected status
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$1$2")
+            if [ "$code" != "$3" ]; then
+              echo "FAIL $2 -> $code (expected $3)"; return 1
+            fi
+            echo "ok   :$1$2 -> $code"
+          }
+
+          echo "--- default port ---"
+          docker run -d --name vdo-default -p 18080:8080 vdo-ninja:smoke
+          wait_up 18080 vdo-default
+          for spec in "/ 200" "/healthz 200" "/mixer 200" "/obs/simple 200" \
+                      "/main.js 200" "/mixer.html 302"; do
+            # shellcheck disable=SC2086
+            set -- $spec
+            check 18080 "$1" "$2" || { docker logs vdo-default; exit 1; }
+          done
 
           # gzip_static must serve the prebuilt .gz sibling
           curl -s -o /dev/null -H 'Accept-Encoding: gzip' -D /tmp/h http://127.0.0.1:18080/lib.js
-          grep -qi '^content-encoding: gzip' /tmp/h || { echo "FAIL lib.js not gzipped"; docker logs vdo-smoke; exit 1; }
+          grep -qi '^content-encoding: gzip' /tmp/h || { echo "FAIL lib.js not gzipped"; docker logs vdo-default; exit 1; }
           echo "ok   /lib.js served gzipped"
+          docker rm -f vdo-default >/dev/null
+
+          # Exercises the exact hardening docker-compose.yml uses. The tmpfs on
+          # /etc/nginx/conf.d is load-bearing: without it the entrypoint cannot
+          # render the template and nginx comes up with no server block.
+          echo "--- custom VDO_PORT on a read-only rootfs ---"
+          docker run -d --name vdo-custom -e VDO_PORT=9090 \
+            --read-only --tmpfs /etc/nginx/conf.d --tmpfs /tmp --tmpfs /var/cache/nginx \
+            -p 19090:9090 vdo-ninja:smoke
+          wait_up 19090 vdo-custom
+          check 19090 /mixer 200 || { docker logs vdo-custom; exit 1; }
+          docker rm -f vdo-custom >/dev/null
+
+          echo "--- a privileged VDO_PORT must refuse to start ---"
+          if docker run --rm -e VDO_PORT=80 vdo-ninja:smoke >/tmp/bad 2>&1; then
+            echo "FAIL: container started despite a privileged VDO_PORT"; cat /tmp/bad; exit 1
+          fi
+          grep -q 'must be between 1025 and 65535' /tmp/bad \
+            || { echo "FAIL: wrong error for privileged port"; cat /tmp/bad; exit 1; }
+          echo "ok   privileged port rejected with a clear message"
 
           docker rm -f vdo-smoke
