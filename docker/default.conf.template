@@ -100,6 +100,25 @@ server {
         return 200   "ok\n";
     }
 
+    # Serve the conferencing wrapper at the root instead of the stock
+    # VDO.Ninja landing page.
+    #
+    # `location = /` is an exact match, so it catches only the bare root and
+    # never the assets - /main.js, /lib.js and /call-theme.css all still fall
+    # through to `location /` below. Doing the same thing in a reverse proxy
+    # by rewriting the path prefix would catch those too and break them.
+    #
+    # Rewriting rather than redirecting keeps the URL at "/", which matters
+    # because the wrapper builds its invite links from window.location - a
+    # redirect would make every shared link carry the /call path. Query
+    # strings are unaffected by location matching, so /?room=xyz still lands
+    # here and still reaches the page with its query intact.
+    #
+    # The stock landing page is still reachable at /index.
+    location = / {
+        try_files /call.html =404;
+    }
+
     # Two-segment paths such as /obs/simple, /examples/control, /whip/index.
     # Tries the literal file first, then its .html form, then the directory,
     # then the same name at the root, before falling back to the subdirectory
