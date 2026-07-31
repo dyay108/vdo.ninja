@@ -1,0 +1,201 @@
+/* ---------------------------------------------------------------------------
+ * call-theme.css - injected INTO the VDO.Ninja iframe by /call
+ *
+ * Loaded via &css=<absolute-url> (main.js:3160). The URL must be absolute:
+ * a relative path fails `new URL()` and gets injected as literal CSS text
+ * instead (main.js:3226), which silently does nothing useful.
+ *
+ * CSS injection is permitted here because the app is running framed -
+ * main.js:3183 allows it when `window !== window.top` or when the stylesheet
+ * is same-origin. /call satisfies both.
+ *
+ * The grid DOM this targets, as built by updateMixer():
+ *
+ *   #gridlayout
+ *     .container_holder_video          one per remote participant
+ *       .holder                        rounded, carries --video-margin
+ *         video.tile                   the stream; data-speaking lives here
+ *         span.video-label             display name
+ *         .video-meter                 loudness dot
+ *     #minipreview                     your own camera
+ *       video.tile.mirrorControl
+ *     .togglePreview                   show/hide the self view
+ *
+ * Note .vidcon is NOT used here - that class belongs to the director layout.
+ *
+ * Scope: this only themes the grid and hides the stock chrome that call.html
+ * replaces. It deliberately leaves #mainmenu and the permission prompts
+ * alone - if the camera is blocked the guest still needs to see why.
+ * ------------------------------------------------------------------------- */
+
+:root {
+	--call-bg: #0e1013;
+	--call-surface: #16191f;
+	--call-border: #2a2f3a;
+	--call-text: #e8eaed;
+	--call-accent: #5b8def;
+	--call-speaking: #37d399;
+
+	/* Consumed by .tile and .holder in main.css. &rounded= sets this too;
+	   declaring it here keeps the radius right if that param is ever dropped. */
+	--video-rounded: 14px;
+}
+
+/* The wrapper page owns the page background. Staying transparent lets its
+   colour show through during layout reflows, which avoids a white flash. */
+html,
+body {
+	background: transparent !important;
+}
+
+/* --- stock chrome replaced by call.html ---------------------------------
+ * Each of these has an equivalent in the wrapper's own UI. &hideheader and
+ * &chatbutton=0 already hide some of it inline; repeating it here keeps
+ * everything in one place and covers what has no URL param.
+ * ---------------------------------------------------------------------- */
+#header,
+#controlButtons,
+#chatModule,
+#translateButton,
+#reportbutton {
+	display: none !important;
+}
+
+/* --- grid --------------------------------------------------------------- */
+
+#gridlayout {
+	background: transparent !important;
+}
+
+#gridlayout .holder {
+	background: var(--call-surface);
+	border-radius: var(--video-rounded);
+	overflow: hidden;
+}
+
+/* Placeholder behind a camera-off or audio-only participant, so the tile
+   reads as an occupied seat rather than a hole in the grid. */
+#gridlayout video.tile {
+	background-color: var(--call-surface) !important;
+}
+
+/* Speaking ring on the tile rather than the video, so it sits outside the
+ * rounded edge cleanly. data-speaking is only written when session.style == 3
+ * or meterStyle is set (lib.js:57981) - which is why call.html passes
+ * &style=3. Values: 0 quiet, 1 talking, 2 loud.
+ */
+#gridlayout .holder:has(video[data-speaking="1"]),
+#gridlayout .holder:has(video[data-speaking="2"]) {
+	box-shadow: inset 0 0 0 3px var(--call-speaking);
+}
+
+#gridlayout .holder:has(video[data-speaking="2"]) {
+	box-shadow: inset 0 0 0 4px var(--call-speaking);
+}
+
+/* --- name chips --------------------------------------------------------- */
+
+#gridlayout .video-label {
+	bottom: 10px !important;
+	left: 10px !important;
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+	font-size: 13px !important;
+	font-weight: 500 !important;
+	line-height: 1.3 !important;
+	color: var(--call-text) !important;
+	background: rgba(14, 16, 19, 0.72) !important;
+	backdrop-filter: blur(6px);
+	border-radius: 8px !important;
+	padding: 5px 10px !important;
+	border: 0 !important;
+	text-shadow: none !important;
+}
+
+/* The stock loudness dot duplicates the ring above; keep it as a small,
+   quiet accent instead of a saturated green blob. */
+#gridlayout .video-meter {
+	background-color: var(--call-speaking) !important;
+	opacity: 0.85;
+	top: 10px !important;
+	right: 10px !important;
+}
+
+/* --- self view ----------------------------------------------------------
+ * #minipreview is a child of #gridlayout, positioned with inline styles set
+ * from JS (top/right/width), so every override needs !important to beat the
+ * style attribute.
+ * ---------------------------------------------------------------------- */
+
+#minipreview {
+	border-radius: 12px !important;
+	overflow: hidden;
+	border: 1px solid var(--call-border) !important;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* Alone in the room, the stock layout leaves the stage empty and parks you in
+ * a corner thumbnail. Meet and Zoom both show you full-size until someone
+ * arrives, so reclaim the stage while no remote tile exists - and give it
+ * back the moment one appears.
+ *
+ * :has() tracks that transition both ways with no help from the parent page. */
+#gridlayout:not(:has(.container_holder_video)) #minipreview {
+	position: absolute !important;
+	top: 0 !important;
+	right: 0 !important;
+	left: 0 !important;
+	bottom: 0 !important;
+	width: 100% !important;
+	max-width: none !important;
+	height: 100% !important;
+	max-height: none !important;
+	margin: 0 !important;
+	border: 0 !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+	cursor: default !important;
+}
+
+#gridlayout:not(:has(.container_holder_video)) #minipreview video {
+	width: 100% !important;
+	height: 100% !important;
+	max-height: none !important;
+	border-radius: 0 !important;
+}
+
+/* The show/hide-preview eye. Stock styling is a bare glyph over the video;
+   give it the same chip treatment as the name labels so it reads as a
+   control. */
+#gridlayout .togglePreview {
+	background: rgba(14, 16, 19, 0.72) !important;
+	backdrop-filter: blur(6px);
+	border-radius: 8px !important;
+	color: var(--call-text) !important;
+	transition: opacity 0.15s;
+}
+
+/* Fade it out until the grid is hovered - but only where hovering is a real
+   input. Gated on (hover: hover) because a touch device never satisfies
+   :hover, which would leave the control permanently invisible. */
+@media (hover: hover) {
+	#gridlayout .togglePreview {
+		opacity: 0;
+	}
+
+	#gridlayout:hover .togglePreview {
+		opacity: 1;
+	}
+}
+
+/* --- anything still visible gets the dark palette ----------------------- */
+
+#main,
+#mainmenu {
+	background: transparent !important;
+	color: var(--call-text);
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+#main a {
+	color: var(--call-accent);
+}

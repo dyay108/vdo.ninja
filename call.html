@@ -1,0 +1,1976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Call</title>
+<link rel="icon" href="./media/favicon.ico" />
+<meta name="robots" content="noindex" />
+<!--
+	A conferencing shell around VDO.Ninja.
+
+	The video grid is a VDO.Ninja iframe (./index.html). Everything around it -
+	prejoin, top bar, control bar, chat and people drawers - belongs to this
+	page and talks to the grid over the iframe postMessage API.
+
+	Nothing here patches index.html, main.js, main.css or lib.js, so this file
+	and call-theme.css are the only things that need reviewing when the fork
+	merges from upstream. What it depends on from the core:
+
+	  &css=            absolute-URL stylesheet injection      main.js:3160
+	  &style=3         enables the data-speaking attribute    lib.js:57981
+	  &label=          display name                           main.js:3533
+	  &muted / &vm     initial mic / camera state             main.js:2229,2237
+	  &autostart       skip the stock device picker           main.js:4884
+	  postMessage in   ~80 commands                           main.js:8600+
+	  postMessage out  action/value/UUID/streamID events      lib.js:10929
+-->
+<style>
+:root {
+	--bg: #0e1013;
+	--surface: #16191f;
+	--surface-2: #1d212a;
+	--surface-3: #262b36;
+	--border: #2a2f3a;
+	--text: #e8eaed;
+	--text-dim: #9aa1ad;
+	--accent: #5b8def;
+	--accent-dim: #3d6fd0;
+	--danger: #e5484d;
+	--danger-dim: #c13a3e;
+	--speaking: #37d399;
+	--radius: 12px;
+	--bar-h: 76px;
+	--top-h: 52px;
+	--drawer-w: 340px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	background: var(--bg);
+	color: var(--text);
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+	font-size: 14px;
+	overflow: hidden;
+	-webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ===================== prejoin ===================== */
+
+#prejoin {
+	position: fixed;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: radial-gradient(1200px 600px at 50% -10%, #1a1f2b 0%, var(--bg) 60%);
+	z-index: 40;
+	overflow-y: auto;
+}
+
+#prejoin.hidden { display: none; }
+
+.prejoin-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+	gap: 32px;
+	align-items: center;
+	width: 100%;
+	max-width: 1040px;
+}
+
+/* --- live preview --- */
+
+.preview-col { min-width: 0; }
+
+#previewStage {
+	position: relative;
+	aspect-ratio: 16 / 9;
+	background: #000;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	overflow: hidden;
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+#previewVideo {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+	/* A self view is a mirror; every conferencing app flips it. */
+	transform: scaleX(-1);
+	background: #000;
+}
+
+#previewStage.no-video #previewVideo { display: none; }
+
+#previewPlaceholder {
+	position: absolute;
+	inset: 0;
+	display: none;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	background: var(--surface);
+	color: var(--text-dim);
+	font-size: 13.5px;
+}
+
+#previewStage.no-video #previewPlaceholder { display: flex; }
+#previewStage.status #previewPlaceholder { display: none !important; }
+
+.avatar-lg {
+	width: 84px;
+	height: 84px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: var(--surface-3);
+	color: var(--text);
+	font-size: 30px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+
+/* permission / hardware errors take over the whole stage */
+#previewStatus {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 28px;
+	background: var(--surface);
+	text-align: center;
+}
+
+#previewStatus.hidden { display: none; }
+
+#previewStatus h2 {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+#previewStatus p {
+	margin: 0;
+	max-width: 42ch;
+	color: var(--text-dim);
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+#previewStatus .status-icon {
+	width: 40px;
+	height: 40px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: rgba(229, 72, 77, 0.14);
+	color: #ff9b9e;
+}
+
+#previewStatus .status-icon svg { width: 22px; height: 22px; }
+#previewStatus #previewRetry { padding: 8px 16px; margin-top: 4px; border-radius: 999px; }
+#previewStatus.no-retry #previewRetry { display: none; }
+
+/* mic level, so it is obvious the chosen mic is actually picking up sound */
+#micMeter {
+	position: absolute;
+	left: 14px;
+	bottom: 14px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 11px;
+	background: rgba(14, 16, 19, 0.72);
+	backdrop-filter: blur(6px);
+	border-radius: 999px;
+	color: var(--text);
+}
+
+#micMeter .ico svg { width: 15px; height: 15px; display: block; }
+#previewStage.status #micMeter,
+#previewStage.no-audio #micMeter { display: none; }
+
+.meter-track {
+	width: 54px;
+	height: 4px;
+	background: rgba(255, 255, 255, 0.18);
+	border-radius: 999px;
+	overflow: hidden;
+}
+
+.meter-fill {
+	width: 0%;
+	height: 100%;
+	background: var(--speaking);
+	border-radius: 999px;
+	transition: width 0.08s linear;
+}
+
+.preview-controls {
+	position: absolute;
+	left: 50%;
+	bottom: 14px;
+	transform: translateX(-50%);
+	display: flex;
+	gap: 10px;
+}
+
+#previewStage.status .preview-controls { display: none; }
+
+/* --- device pickers --- */
+
+.device-row {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.device-row.no-speaker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#spkRow.hidden { display: none; }
+
+.device {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 0 10px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--text-dim);
+	cursor: pointer;
+}
+
+.device:hover { background: var(--surface-2); }
+.device .ico { flex: 0 0 auto; display: grid; place-items: center; }
+.device .ico svg { width: 16px; height: 16px; display: block; }
+
+.device select {
+	flex: 1;
+	min-width: 0;
+	padding: 10px 0;
+	background: none;
+	border: 0;
+	color: var(--text);
+	font-size: 12.5px;
+	cursor: pointer;
+	appearance: none;
+	text-overflow: ellipsis;
+}
+
+.device select:focus { outline: none; }
+.device:focus-within { border-color: var(--accent); }
+.device select option { background: var(--surface-2); color: var(--text); }
+.device select:disabled { color: var(--text-dim); cursor: default; }
+
+.card {
+	width: 100%;
+	max-width: 420px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	padding: 32px;
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.card h1 {
+	margin: 0 0 6px;
+	font-size: 24px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+
+.card p.sub {
+	margin: 0 0 24px;
+	color: var(--text-dim);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.field { margin-bottom: 16px; }
+
+.field label {
+	display: block;
+	margin-bottom: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-dim);
+}
+
+.field input {
+	width: 100%;
+	padding: 11px 13px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--text);
+	font-size: 15px;
+}
+
+.field input::placeholder { color: #626b7a; }
+.field input:focus { border-color: var(--accent); }
+
+.field-row { display: flex; gap: 8px; }
+.field-row input { flex: 1; }
+
+.ghost-btn {
+	padding: 0 14px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
+.ghost-btn:hover { background: var(--surface-3); color: var(--text); }
+
+.primary-btn {
+	width: 100%;
+	padding: 13px;
+	background: var(--accent);
+	border: 0;
+	border-radius: 10px;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.primary-btn:hover { background: var(--accent-dim); }
+.primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.card .foot {
+	margin: 20px 0 0;
+	text-align: center;
+	font-size: 12px;
+	color: #5d6675;
+}
+
+.card .foot a { color: #5d6675; }
+
+.shake { animation: shake 0.28s; }
+@keyframes shake {
+	0%, 100% { transform: translateX(0); }
+	25% { transform: translateX(-6px); }
+	75% { transform: translateX(6px); }
+}
+
+/* ===================== app shell ===================== */
+
+#app {
+	display: none;
+	flex-direction: column;
+	height: 100%;
+}
+
+#app.live { display: flex; }
+
+#topbar {
+	height: var(--top-h);
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 16px;
+	border-bottom: 1px solid var(--border);
+	background: var(--surface);
+}
+
+#roomLabel {
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+#topbar .spacer { flex: 1; }
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 11px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--text-dim);
+	font-size: 12.5px;
+	font-weight: 500;
+}
+
+button.chip:hover { background: var(--surface-3); color: var(--text); }
+.chip svg { width: 15px; height: 15px; }
+
+#stageRow {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+}
+
+#stage {
+	flex: 1;
+	position: relative;
+	min-width: 0;
+	background: var(--bg);
+}
+
+#stage iframe {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	display: block;
+}
+
+/* ===================== drawer ===================== */
+
+#drawer {
+	width: var(--drawer-w);
+	flex: 0 0 var(--drawer-w);
+	display: none;
+	flex-direction: column;
+	border-left: 1px solid var(--border);
+	background: var(--surface);
+}
+
+#drawer.open { display: flex; }
+
+.drawer-tabs {
+	display: flex;
+	flex: 0 0 auto;
+	border-bottom: 1px solid var(--border);
+}
+
+.drawer-tab {
+	flex: 1;
+	padding: 13px 0;
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	color: var(--text-dim);
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.drawer-tab[aria-selected="true"] {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+
+.drawer-panel {
+	display: none;
+	flex: 1;
+	min-height: 0;
+	flex-direction: column;
+}
+
+.drawer-panel.active { display: flex; }
+
+/* --- chat --- */
+
+#chatLog {
+	flex: 1;
+	overflow-y: auto;
+	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.msg { font-size: 13.5px; line-height: 1.45; }
+
+.msg .who {
+	display: block;
+	margin-bottom: 2px;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
+.msg.self .who { color: var(--accent); }
+.msg .body { word-wrap: break-word; overflow-wrap: anywhere; }
+.msg .body a { color: var(--accent); }
+
+.msg.system {
+	color: var(--text-dim);
+	font-size: 12.5px;
+	font-style: italic;
+	text-align: center;
+}
+
+#chatEmpty {
+	margin: auto;
+	padding: 0 24px;
+	color: #5d6675;
+	font-size: 13px;
+	text-align: center;
+	line-height: 1.5;
+}
+
+#chatForm {
+	flex: 0 0 auto;
+	display: flex;
+	gap: 8px;
+	padding: 12px;
+	border-top: 1px solid var(--border);
+}
+
+#chatInput {
+	flex: 1;
+	min-width: 0;
+	padding: 10px 12px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--text);
+	font-size: 13.5px;
+}
+
+#chatInput::placeholder { color: #626b7a; }
+#chatInput:focus { border-color: var(--accent); }
+
+#chatSend {
+	padding: 0 15px;
+	background: var(--accent);
+	border: 0;
+	border-radius: 10px;
+	color: #fff;
+	font-weight: 600;
+	font-size: 13.5px;
+}
+
+#chatSend:hover { background: var(--accent-dim); }
+
+/* --- people --- */
+
+#peopleList {
+	flex: 1;
+	overflow-y: auto;
+	padding: 8px;
+	margin: 0;
+	list-style: none;
+}
+
+#peopleList li {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 10px;
+	border-radius: 10px;
+	font-size: 13.5px;
+}
+
+#peopleList li:hover { background: var(--surface-2); }
+
+.avatar {
+	width: 30px;
+	height: 30px;
+	flex: 0 0 30px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: var(--surface-3);
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text);
+	text-transform: uppercase;
+}
+
+.person-name {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.person-tag {
+	font-size: 11px;
+	color: var(--text-dim);
+	font-weight: 500;
+}
+
+/* ===================== control bar ===================== */
+
+#controlbar {
+	height: var(--bar-h);
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 0 16px;
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+}
+
+.ctrl {
+	position: relative;
+	width: 46px;
+	height: 46px;
+	display: grid;
+	place-items: center;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	color: var(--text);
+	transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.ctrl:hover { background: var(--surface-3); }
+.ctrl svg { width: 21px; height: 21px; pointer-events: none; }
+
+/* Mic and camera: off is the state worth shouting about, matching the
+   convention both Meet and Zoom use. */
+.ctrl.danger-off[aria-pressed="false"] {
+	background: var(--danger);
+	border-color: var(--danger);
+	color: #fff;
+}
+
+.ctrl.danger-off[aria-pressed="false"]:hover { background: var(--danger-dim); }
+
+/* Screenshare, hand, chat, people: on is the notable state. */
+.ctrl.accent-on[aria-pressed="true"] {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #fff;
+}
+
+.ctrl.accent-on[aria-pressed="true"]:hover { background: var(--accent-dim); }
+
+.ctrl.leave {
+	width: 58px;
+	border-radius: 999px;
+	background: var(--danger);
+	border-color: var(--danger);
+	color: #fff;
+	margin-left: 6px;
+}
+
+.ctrl.leave:hover { background: var(--danger-dim); }
+
+.ctrl .badge {
+	position: absolute;
+	top: -2px;
+	right: -2px;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	display: none;
+	place-items: center;
+	background: var(--accent);
+	border: 2px solid var(--surface);
+	border-radius: 999px;
+	color: #fff;
+	font-size: 10.5px;
+	font-weight: 700;
+}
+
+.ctrl .badge.show { display: grid; }
+
+.ctrl .off-slash {
+	position: absolute;
+	inset: 0;
+	display: none;
+	place-items: center;
+	pointer-events: none;
+}
+
+.ctrl[aria-pressed="false"] .off-slash { display: grid; }
+.ctrl .off-slash svg { width: 21px; height: 21px; }
+
+/* ===================== toast ===================== */
+
+#toast {
+	position: fixed;
+	left: 50%;
+	bottom: calc(var(--bar-h) + 18px);
+	transform: translateX(-50%) translateY(12px);
+	padding: 10px 18px;
+	background: var(--surface-3);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 13px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.18s, transform 0.18s;
+	z-index: 50;
+}
+
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ===================== responsive ===================== */
+
+/* Below ~900px the two prejoin columns stop fitting side by side. Stack them
+   with the preview on top, the way Meet does on a narrow window. */
+@media (max-width: 900px) {
+	#prejoin { place-items: start center; }
+
+	.prejoin-grid {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 20px;
+		max-width: 520px;
+	}
+
+	.card { max-width: none; }
+}
+
+@media (max-width: 720px) {
+	:root { --bar-h: 68px; --drawer-w: 100%; }
+
+	/* Three device pickers side by side truncate to uselessness on a phone. */
+	.device-row,
+	.device-row.no-speaker { grid-template-columns: minmax(0, 1fr); }
+
+	.ctrl { width: 42px; height: 42px; }
+	.ctrl svg, .ctrl .off-slash svg { width: 19px; height: 19px; }
+	#controlbar { gap: 7px; padding: 0 8px; }
+
+	/* The drawer takes the whole stage rather than squeezing the grid. */
+	#drawer.open { position: fixed; inset: var(--top-h) 0 var(--bar-h); z-index: 30; }
+	#topbar .hide-sm { display: none; }
+	.card { padding: 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===================== prejoin ===================== -->
+<div id="prejoin">
+	<div class="prejoin-grid">
+
+		<!-- left: live self preview, owned by this page (not the iframe) -->
+		<div class="preview-col">
+			<div id="previewStage">
+				<video id="previewVideo" autoplay playsinline muted></video>
+
+				<div id="previewPlaceholder">
+					<div class="avatar-lg" id="previewInitials">?</div>
+					<p id="previewPlaceholderText">Camera is off</p>
+				</div>
+
+				<div id="previewStatus" class="hidden">
+					<div class="status-icon"></div>
+					<h2 id="previewStatusTitle"></h2>
+					<p id="previewStatusBody"></p>
+					<button type="button" class="ghost-btn" id="previewRetry">Try again</button>
+				</div>
+
+				<div id="micMeter" title="Microphone level">
+					<span class="ico"></span>
+					<div class="meter-track"><div class="meter-fill" id="micMeterFill"></div></div>
+				</div>
+
+				<div class="preview-controls">
+					<button type="button" class="ctrl danger-off" id="preMic" aria-pressed="true" aria-label="Toggle microphone"><span class="ico"></span></button>
+					<button type="button" class="ctrl danger-off" id="preCam" aria-pressed="true" aria-label="Toggle camera"><span class="ico"></span></button>
+				</div>
+			</div>
+
+			<!-- device pickers. Populated only once permission unlocks labels;
+			     enumerateDevices() returns blank label AND blank deviceId before that. -->
+			<div class="device-row">
+				<label class="device" for="camSelect">
+					<span class="ico"></span>
+					<select id="camSelect" aria-label="Camera"><option>Camera</option></select>
+				</label>
+				<label class="device" for="micSelect">
+					<span class="ico"></span>
+					<select id="micSelect" aria-label="Microphone"><option>Microphone</option></select>
+				</label>
+				<label class="device" for="spkSelect" id="spkRow">
+					<span class="ico"></span>
+					<select id="spkSelect" aria-label="Speaker"><option>Speaker</option></select>
+				</label>
+			</div>
+		</div>
+
+		<!-- right: room details -->
+		<div class="card">
+			<h1>Join a call</h1>
+			<p class="sub">Everyone who opens the same room name lands in the same call.</p>
+
+			<div class="field">
+				<label for="roomInput">Room name</label>
+				<div class="field-row">
+					<input id="roomInput" type="text" placeholder="team-standup" autocomplete="off" spellcheck="false" />
+					<button type="button" class="ghost-btn" id="randomRoom" title="Generate a random room name">Random</button>
+				</div>
+			</div>
+
+			<div class="field">
+				<label for="nameInput">Your name</label>
+				<input id="nameInput" type="text" placeholder="Alex" autocomplete="name" maxlength="40" />
+			</div>
+
+			<div class="field">
+				<label for="passInput">Room password <span style="opacity:.65">(optional)</span></label>
+				<input id="passInput" type="password" placeholder="Leave blank for none" autocomplete="off" />
+			</div>
+
+			<button type="button" class="primary-btn" id="joinBtn">Join call</button>
+			<p class="foot">Powered by <a href="https://vdo.ninja" target="_blank" rel="noopener">VDO.Ninja</a></p>
+		</div>
+
+	</div>
+</div>
+
+<!-- ===================== in-call ===================== -->
+<div id="app">
+	<header id="topbar">
+		<span id="roomLabel"></span>
+		<span class="spacer"></span>
+		<button type="button" class="chip" id="copyLink" title="Copy the invite link">
+			<span class="ico"></span><span class="hide-sm">Copy invite</span>
+		</button>
+		<span class="chip" id="peopleCount" title="People in this call">
+			<span class="ico"></span><span id="peopleCountN">1</span>
+		</span>
+	</header>
+
+	<div id="stageRow">
+		<div id="stage"></div>
+
+		<aside id="drawer">
+			<div class="drawer-tabs" role="tablist">
+				<button type="button" class="drawer-tab" id="tabChat" role="tab" aria-selected="true" aria-controls="panelChat">Chat</button>
+				<button type="button" class="drawer-tab" id="tabPeople" role="tab" aria-selected="false" aria-controls="panelPeople">People</button>
+			</div>
+
+			<div class="drawer-panel active" id="panelChat" role="tabpanel">
+				<div id="chatLog">
+					<p id="chatEmpty">Messages are visible to everyone in the call and are not saved.</p>
+				</div>
+				<form id="chatForm" autocomplete="off">
+					<input id="chatInput" type="text" placeholder="Send a message" maxlength="500" />
+					<button type="submit" id="chatSend">Send</button>
+				</form>
+			</div>
+
+			<div class="drawer-panel" id="panelPeople" role="tabpanel">
+				<ul id="peopleList"></ul>
+			</div>
+		</aside>
+	</div>
+
+	<footer id="controlbar">
+		<button type="button" class="ctrl danger-off" id="btnMic" aria-pressed="true" title="Microphone (Ctrl+D)" aria-label="Toggle microphone"><span class="ico"></span></button>
+		<button type="button" class="ctrl danger-off" id="btnCam" aria-pressed="true" title="Camera (Ctrl+E)" aria-label="Toggle camera"><span class="ico"></span></button>
+		<button type="button" class="ctrl accent-on" id="btnShare" aria-pressed="false" title="Present your screen" aria-label="Toggle screen share"><span class="ico"></span></button>
+		<button type="button" class="ctrl accent-on" id="btnHand" aria-pressed="false" title="Raise hand" aria-label="Raise hand"><span class="ico"></span></button>
+		<button type="button" class="ctrl accent-on" id="btnChat" aria-pressed="false" title="Chat" aria-label="Toggle chat"><span class="ico"></span><span class="badge" id="chatBadge">0</span></button>
+		<button type="button" class="ctrl accent-on" id="btnPeople" aria-pressed="false" title="People" aria-label="Toggle people list"><span class="ico"></span></button>
+		<button type="button" class="ctrl" id="btnSettings" title="Camera and mic settings" aria-label="Settings"><span class="ico"></span></button>
+		<button type="button" class="ctrl leave" id="btnLeave" title="Leave the call" aria-label="Leave call"><span class="ico"></span></button>
+	</footer>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+ * icons
+ * Inline so the shell has no font dependency of its own. Each is a 24x24
+ * currentColor path set.
+ * ===================================================================== */
+
+var ICON = {
+	mic: '<path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M18 11a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V19H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.1a6 6 0 0 0 5-5.9Z"/>',
+	micOff: '<path d="M15 11.2V6a3 3 0 0 0-5.8-1.1l5.8 6.3Z"/><path d="M18 11a1 1 0 1 0-2 0c0 .6-.1 1.1-.3 1.6l1.5 1.6c.5-.9.8-2 .8-3.2Z"/><path d="M12 15c.3 0 .5 0 .8-.1L9 10.8V12a3 3 0 0 0 3 3Z"/><path d="M4.7 3.3a1 1 0 0 0-1.4 1.4l3.7 4V12a6 6 0 0 0 9 5.2l1.3 1.4V19H9a1 1 0 1 0 0 2h6a1 1 0 0 0 .9-1.4l3.4 3.7a1 1 0 0 0 1.4-1.4l-16-17.6Z"/><path d="M8 11a1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V19h2v-2.1a6 6 0 0 0 1.6-.4l-1.5-1.6a4 4 0 0 1-5.1-3.9Z"/>',
+	cam: '<path d="M4 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/><path d="m22 8-4 3v2l4 3V8Z"/>',
+	camOff: '<path d="M4.7 3.3a1 1 0 0 0-1.4 1.4L4.6 6H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10c.3 0 .6 0 .8-.2l4.5 4.5a1 1 0 0 0 1.4-1.4L4.7 3.3Z"/><path d="M16 8v5.2l-6-6H14a2 2 0 0 1 2 2Z"/><path d="m22 8-4 3v2l4 3V8Z"/>',
+	share: '<path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h3a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2h3v-2H5a2 2 0 0 1-2-2V5Zm2 0v10h14V5H5Z"/><path d="M12 6.5 8.5 10h2.2v3h2.6v-3h2.2L12 6.5Z"/>',
+	hand: '<path d="M11 2.5a1.3 1.3 0 0 1 2.5 0V10h.6V3.8a1.3 1.3 0 0 1 2.5 0V10h.6V6a1.3 1.3 0 0 1 2.5 0v8.2c0 4-2.7 7.3-6.7 7.3-2.2 0-3.8-.8-5.2-2.4l-3.4-4a1.4 1.4 0 0 1 .3-2c.6-.4 1.4-.3 2 .2l1.8 1.7V4.2a1.3 1.3 0 0 1 2.5 0V10h.6V2.5Z"/>',
+	chat: '<path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 5h12V6H6v2Zm0 4h9v-2H6v2Z"/>',
+	people: '<path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-7 1.7-7 4v2h14v-2c0-2.3-3.7-4-7-4Z"/><path d="M16.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm.5 2c-.6 0-1.2 0-1.8.2 1.4 1 2.3 2.3 2.3 3.8v2H23v-2c0-2.3-3.4-4-6-4Z"/>',
+	gear: '<path fill-rule="evenodd" clip-rule="evenodd" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.5a.5.5 0 0 0-.6-.2l-2.5 1a7.4 7.4 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6c-.6.2-1.2.6-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.5a.5.5 0 0 0 .1.6L4.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.5c.1.2.4.3.6.2l2.5-1c.5.4 1.1.8 1.7 1l.4 2.6c0 .2.2.4.5.4h4c.3 0 .5-.2.5-.4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.5a.5.5 0 0 0-.1-.6L19.4 13ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/>',
+	leave: '<path d="M12 9c-1.6 0-3.2.3-4.6.7v3.1c0 .4-.2.8-.6.9-1 .5-1.9 1.1-2.7 1.9-.2.1-.4.2-.7.2-.3 0-.5-.1-.7-.3L.3 13.1a1 1 0 0 1-.3-.7c0-.3.1-.5.3-.7C3.3 8.8 7.5 7 12 7s8.7 1.8 11.7 4.7c.2.2.3.4.3.7 0 .3-.1.5-.3.7l-2.4 2.4c-.2.2-.5.3-.7.3-.3 0-.5-.1-.7-.2a11.5 11.5 0 0 0-2.7-1.9 1 1 0 0 1-.6-.9V9.7C15.2 9.3 13.6 9 12 9Z"/>',
+	copy: '<path d="M8 3h9a2 2 0 0 1 2 2v11h-2V5H8V3Z"/><path d="M5 7h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm0 2v10h9V9H5Z"/>',
+	check: '<path d="M9.5 17.3 4.2 12l1.4-1.4 3.9 3.9 8.9-8.9L19.8 7 9.5 17.3Z"/>',
+	speaker: '<path d="M4 9v6h4l5 4V5L8 9H4Z"/><path d="M16.5 12a3.5 3.5 0 0 0-2-3.2v6.4a3.5 3.5 0 0 0 2-3.2Z"/><path d="M14.5 4.3v2.1a5.8 5.8 0 0 1 0 11.2v2.1a7.8 7.8 0 0 0 0-15.4Z"/>',
+	// evenodd so the exclamation punches through the triangle; with the
+	// default nonzero rule the subpaths fill solid and vanish.
+	warn: '<path fill-rule="evenodd" clip-rule="evenodd" d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-7h-2v5h2V9Z"/>'
+};
+
+function svg(name) {
+	return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' + ICON[name] + "</svg>";
+}
+
+function setIcon(el, name) {
+	var slot = el.querySelector(".ico");
+	if (slot) { slot.innerHTML = svg(name); }
+}
+
+function $(id) { return document.getElementById(id); }
+
+/* =========================================================================
+ * state
+ * ===================================================================== */
+
+var state = {
+	room: "",
+	password: "",
+	name: "",
+	mic: true,
+	cam: true,
+	// Chosen device ids, used for the local preview only. What gets handed to
+	// the iframe is the matching *label* - see buildSrc().
+	camId: null,
+	micId: null,
+	spkId: null,
+	sharing: false,
+	hand: false,
+	drawer: null,      // null | "chat" | "people"
+	unread: 0,
+	peers: {},         // UUID -> { label, streamID }
+	joined: false
+};
+
+var iframe = null;
+var pollTimer = null;
+
+/* =========================================================================
+ * iframe bridge
+ * ===================================================================== */
+
+function send(msg) {
+	if (!iframe || !iframe.contentWindow) { return; }
+	// Same-origin by construction, so the wildcard target is not a leak here,
+	// but naming the origin keeps it correct if the frame is ever moved.
+	iframe.contentWindow.postMessage(msg, window.location.origin);
+}
+
+/* Commands registered in lib.js setupCommands().
+ *
+ * Sent as a bare { action } - NOT as { function: "commands", action }. Both
+ * forms reach the same Commands[] entry, but the core has two dispatchers
+ * that each match on a different key: main.js:8678 fires on
+ * function === "commands", and main.js:9911 fires on any `action` key. The
+ * combined form satisfies both and runs the command twice, which for a
+ * toggle like raisehand means it raises and immediately lowers.
+ *
+ * { action } alone only matches the second, via processMessage(). */
+function command(action, value) {
+	var msg = { action: action };
+	if (typeof value !== "undefined") { msg.value = value; }
+	send(msg);
+}
+
+function buildSrc() {
+	// &css= must be absolute or main.js:3226 injects the string as raw CSS.
+	var themeURL = new URL("call-theme.css", window.location.href).href;
+
+	var params = [
+		"room=" + encodeURIComponent(state.room),
+		"label=" + encodeURIComponent(state.name),
+		"webcam",              // publish a camera rather than only viewing
+		"autostart",           // skip the stock device picker; ours came first
+		"style=3",             // required for data-speaking (lib.js:57981)
+		// raisehand() returns early unless a director is present or
+		// raisehands == 2 (lib.js:20594). These rooms have no director, so
+		// without this the hand button would silently do nothing. At 2 the
+		// state broadcasts to every peer instead.
+		"hands=2",
+		"rounded=14",
+		"margin=8",
+		"transparent",
+		"hideheader",
+		"hidetranslate",
+		"novice",
+		"minipreview",
+		"chatbutton=0",        // the drawer owns chat
+		"showlabel",           // default style: bottom-left, themed in call-theme.css
+		"css=" + encodeURIComponent(themeURL)
+	];
+
+	if (state.password) { params.push("password=" + encodeURIComponent(state.password)); }
+	if (!state.mic) { params.push("muted"); }
+	if (!state.cam) { params.push("videomute"); }
+
+	/* Device pre-selection.
+	 *
+	 * These take a LABEL, not a deviceId. main.js normalizes the value with
+	 * normalizeDeviceLabel() and matches it against each device's label -
+	 * startsWith first, then includes (lib.js:31475). There is a deviceId
+	 * branch in the same function but it does not fire for these params:
+	 * passing a raw id yields no track at all, whereas the label works. Ids
+	 * would be the wrong key anyway, since they are origin-scoped and rotate
+	 * when site data is cleared.
+	 *
+	 * The cost is that two identical devices ("HD Webcam" twice) are
+	 * ambiguous and the first match wins.
+	 */
+	var camLabel = state.cam ? labelOf("cam", state.camId) : "";
+	var micLabel = state.mic ? labelOf("mic", state.micId) : "";
+	var spkLabel = SPEAKER_SELECTION_SUPPORTED ? labelOf("spk", state.spkId) : "";
+
+	if (camLabel) { params.push("vd=" + encodeURIComponent(camLabel)); }
+	if (micLabel) { params.push("ad=" + encodeURIComponent(micLabel)); }
+	// "default" is a virtual entry that follows the OS; pinning it by label
+	// would match the literal string rather than the real output.
+	if (spkLabel && state.spkId !== "default") { params.push("od=" + encodeURIComponent(spkLabel)); }
+
+	return "./index.html?" + params.join("&");
+}
+
+function mountIframe(src) {
+	iframe = document.createElement("iframe");
+	iframe.id = "vdoframe";
+	iframe.title = "Video grid";
+	iframe.allow = "autoplay;camera;microphone;fullscreen;picture-in-picture;display-capture;screen-wake-lock;speaker-selection";
+	iframe.setAttribute("allowtransparency", "true");
+	iframe.src = src || buildSrc();
+	$("stage").appendChild(iframe);
+}
+
+/* =========================================================================
+ * inbound events  (lib.js pokeIframeAPI -> { action, value, UUID, streamID })
+ * ===================================================================== */
+
+window.addEventListener("message", function (e) {
+	if (!iframe || e.source !== iframe.contentWindow) { return; }
+	if (e.origin !== window.location.origin) { return; }
+
+	var d = e.data;
+	if (!d || typeof d !== "object") { return; }
+
+	if (d.action) { handleAction(d); }
+	if (d.chat) { handleChat(d.chat); }
+	if (d.streamInfo) { handleStreamInfo(d.streamInfo); }
+});
+
+function handleAction(d) {
+	switch (d.action) {
+		case "mic-mute-state":
+			// value is session.muted, so true means muted.
+			if (typeof d.value === "boolean") { setMic(!d.value, true); }
+			break;
+
+		case "video-mute-state":
+			// Two different producers write this: lib.js:19608 sends a boolean
+			// (the real mute state) and lib.js:19534 sends document
+			// .visibilityState, a string. Only the boolean is meaningful here.
+			if (typeof d.value === "boolean") { setCam(!d.value, true); }
+			break;
+
+		case "screen-share-state":
+			setShare(!!d.value, true);
+			break;
+
+		case "hand":
+			setHand(!!d.value, true);
+			break;
+
+		case "joined-room-complete":
+			state.joined = true;
+			refreshPeers();
+			break;
+
+		case "new-stream-added":
+			if (d.UUID) {
+				state.peers[d.UUID] = state.peers[d.UUID] || { label: "", streamID: d.streamID || "" };
+				renderPeople();
+			}
+			refreshPeers();
+			break;
+
+		case "hungup":
+			// Fired for our own hangup with no UUID (lib.js:20545), and for a
+			// director dropping someone with one (lib.js:20796). A peer simply
+			// leaving is not reported, so the poll below is what keeps the
+			// roster honest.
+			if (d.UUID) {
+				delete state.peers[d.UUID];
+				renderPeople();
+			}
+			refreshPeers();
+			break;
+	}
+}
+
+/* getStreamInfo returns every current session.rpcs entry (main.js:9526), which
+   makes it the reliable source for the roster - joins and leaves both show up
+   without needing an event for each. */
+function refreshPeers() { send({ getStreamInfo: true }); }
+
+function handleStreamInfo(info) {
+	var next = {};
+	for (var uuid in info) {
+		if (!Object.prototype.hasOwnProperty.call(info, uuid)) { continue; }
+		next[uuid] = {
+			label: info[uuid].label || "",
+			streamID: info[uuid].streamID || ""
+		};
+	}
+	state.peers = next;
+	renderPeople();
+}
+
+/* =========================================================================
+ * chat
+ * ===================================================================== */
+
+function stripTags(html) {
+	var t = document.createElement("div");
+	t.innerHTML = html || "";
+	return (t.textContent || "").replace(/:\s*$/, "").trim();
+}
+
+function linkify(text) {
+	var frag = document.createDocumentFragment();
+	var re = /https?:\/\/[^\s<]+/g;
+	var last = 0;
+	var m;
+
+	while ((m = re.exec(text)) !== null) {
+		if (m.index > last) {
+			frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+		}
+		var a = document.createElement("a");
+		a.href = m[0];
+		a.target = "_blank";
+		a.rel = "noopener noreferrer";
+		a.textContent = m[0];
+		frag.appendChild(a);
+		last = m.index + m[0].length;
+	}
+
+	if (last < text.length) {
+		frag.appendChild(document.createTextNode(text.slice(last)));
+	}
+	return frag;
+}
+
+/* The core hands us data.label as markup (lib.js:51686) and data.msg already
+   sanitised by sanitizeChat. Both go in as text regardless - the only thing
+   built as real DOM is the linkified body. */
+function handleChat(chat) {
+	var who = stripTags(chat.label) || "Someone";
+	addMessage(who, chat.msg, false);
+
+	if (state.drawer !== "chat") {
+		state.unread++;
+		renderBadge();
+	}
+}
+
+function addMessage(who, text, isSelf) {
+	var empty = $("chatEmpty");
+	if (empty) { empty.remove(); }
+
+	var log = $("chatLog");
+	var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+
+	var el = document.createElement("div");
+	el.className = "msg" + (isSelf ? " self" : "");
+
+	var w = document.createElement("span");
+	w.className = "who";
+	w.textContent = isSelf ? "You" : who;
+
+	var b = document.createElement("span");
+	b.className = "body";
+	b.appendChild(linkify(String(text)));
+
+	el.appendChild(w);
+	el.appendChild(b);
+	log.appendChild(el);
+
+	if (atBottom || isSelf) { log.scrollTop = log.scrollHeight; }
+}
+
+function addSystemMessage(text) {
+	var empty = $("chatEmpty");
+	if (empty) { empty.remove(); }
+
+	var log = $("chatLog");
+	var el = document.createElement("div");
+	el.className = "msg system";
+	el.textContent = text;
+	log.appendChild(el);
+	log.scrollTop = log.scrollHeight;
+}
+
+function renderBadge() {
+	var b = $("chatBadge");
+	b.textContent = state.unread > 9 ? "9+" : String(state.unread);
+	b.classList.toggle("show", state.unread > 0);
+}
+
+/* =========================================================================
+ * people
+ * ===================================================================== */
+
+function initials(name) {
+	var parts = String(name).trim().split(/\s+/).filter(Boolean);
+	if (!parts.length) { return "?"; }
+	if (parts.length === 1) { return parts[0].slice(0, 2); }
+	return parts[0][0] + parts[parts.length - 1][0];
+}
+
+function renderPeople() {
+	var list = $("peopleList");
+	list.textContent = "";
+
+	var rows = [{ name: state.name || "You", tag: "You" }];
+
+	for (var uuid in state.peers) {
+		if (!Object.prototype.hasOwnProperty.call(state.peers, uuid)) { continue; }
+		var p = state.peers[uuid];
+		rows.push({ name: p.label || p.streamID || "Guest", tag: "" });
+	}
+
+	rows.forEach(function (r) {
+		var li = document.createElement("li");
+
+		var av = document.createElement("span");
+		av.className = "avatar";
+		av.textContent = initials(r.name);
+
+		var nm = document.createElement("span");
+		nm.className = "person-name";
+		nm.textContent = r.name;
+
+		li.appendChild(av);
+		li.appendChild(nm);
+
+		if (r.tag) {
+			var tg = document.createElement("span");
+			tg.className = "person-tag";
+			tg.textContent = r.tag;
+			li.appendChild(tg);
+		}
+
+		list.appendChild(li);
+	});
+
+	$("peopleCountN").textContent = String(rows.length);
+}
+
+/* =========================================================================
+ * controls
+ *
+ * Every setter takes `fromCore`: when the change originated inside the iframe
+ * we only repaint, and when it originated here we also send the command. That
+ * keeps the buttons authoritative without echoing state back and forth.
+ * ===================================================================== */
+
+function setMic(on, fromCore) {
+	state.mic = on;
+	var b = $("btnMic");
+	b.setAttribute("aria-pressed", String(on));
+	b.title = on ? "Mute microphone (Ctrl+D)" : "Unmute microphone (Ctrl+D)";
+	setIcon(b, on ? "mic" : "micOff");
+	if (!fromCore) { send({ mic: on }); }
+}
+
+function setCam(on, fromCore) {
+	state.cam = on;
+	var b = $("btnCam");
+	b.setAttribute("aria-pressed", String(on));
+	b.title = on ? "Turn camera off (Ctrl+E)" : "Turn camera on (Ctrl+E)";
+	setIcon(b, on ? "cam" : "camOff");
+	if (!fromCore) { send({ camera: on }); }
+}
+
+function setShare(on, fromCore) {
+	state.sharing = on;
+	var b = $("btnShare");
+	b.setAttribute("aria-pressed", String(on));
+	b.title = on ? "Stop presenting" : "Present your screen";
+	if (!fromCore) { command("togglescreenshare"); }
+}
+
+function setHand(on, fromCore) {
+	state.hand = on;
+	var b = $("btnHand");
+	b.setAttribute("aria-pressed", String(on));
+	b.title = on ? "Lower hand" : "Raise hand";
+	if (!fromCore) { command("raisehand"); }
+}
+
+function openDrawer(which) {
+	// Clicking the active tab's button closes the drawer, as both Meet and
+	// Zoom do.
+	state.drawer = state.drawer === which ? null : which;
+
+	var open = state.drawer !== null;
+	$("drawer").classList.toggle("open", open);
+	$("btnChat").setAttribute("aria-pressed", String(state.drawer === "chat"));
+	$("btnPeople").setAttribute("aria-pressed", String(state.drawer === "people"));
+
+	if (open) {
+		var isChat = state.drawer === "chat";
+		$("tabChat").setAttribute("aria-selected", String(isChat));
+		$("tabPeople").setAttribute("aria-selected", String(!isChat));
+		$("panelChat").classList.toggle("active", isChat);
+		$("panelPeople").classList.toggle("active", !isChat);
+
+		if (isChat) {
+			state.unread = 0;
+			renderBadge();
+			$("chatInput").focus();
+		} else {
+			refreshPeers();
+		}
+	}
+}
+
+function leave() {
+	send({ hangup: true });
+	if (pollTimer) { clearInterval(pollTimer); }
+	// Back to the prejoin card, with the room prefilled so rejoining is one
+	// click. A full reload is the surest way to drop the media devices.
+	var url = new URL(window.location.href);
+	url.searchParams.set("room", state.room);
+	if (state.name) { url.searchParams.set("name", state.name); }
+	setTimeout(function () { window.location.replace(url.href); }, 250);
+}
+
+/* =========================================================================
+ * misc ui
+ * ===================================================================== */
+
+var toastTimer = null;
+
+function toast(text) {
+	var t = $("toast");
+	t.textContent = text;
+	t.classList.add("show");
+	if (toastTimer) { clearTimeout(toastTimer); }
+	toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2200);
+}
+
+function inviteURL() {
+	var url = new URL(window.location.href);
+	url.search = "";
+	url.searchParams.set("room", state.room);
+	if (state.password) { url.searchParams.set("password", state.password); }
+	return url.href;
+}
+
+function copyInvite() {
+	var text = inviteURL();
+	var done = function () {
+		toast("Invite link copied");
+		var b = $("copyLink");
+		setIcon(b, "check");
+		setTimeout(function () { setIcon(b, "copy"); }, 1600);
+	};
+
+	if (navigator.clipboard && window.isSecureContext) {
+		navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+	} else {
+		fallbackCopy(text, done);
+	}
+}
+
+function fallbackCopy(text, done) {
+	var ta = document.createElement("textarea");
+	ta.value = text;
+	ta.setAttribute("readonly", "");
+	ta.style.position = "fixed";
+	ta.style.opacity = "0";
+	document.body.appendChild(ta);
+	ta.select();
+	try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed"); }
+	document.body.removeChild(ta);
+}
+
+function randomName() {
+	var words = ["amber", "basalt", "cedar", "delta", "ember", "fjord", "gravel", "harbor",
+		"indigo", "juniper", "kelp", "lumen", "marble", "nimbus", "onyx", "pine",
+		"quartz", "ridge", "slate", "tundra", "umbra", "verdant", "willow", "zephyr"];
+	var pick = function () { return words[Math.floor(Math.random() * words.length)]; };
+	return pick() + "-" + pick() + "-" + Math.floor(100 + Math.random() * 900);
+}
+
+/* Mirrors the core's own room-name rules so a name accepted here is not
+   silently rewritten once it reaches VDO.Ninja. */
+function sanitizeRoom(name) {
+	return String(name || "").trim().replace(/[\W_]+/g, "").toLowerCase().slice(0, 60);
+}
+
+/* =========================================================================
+ * prejoin media
+ *
+ * The preview stream belongs to this page, not the iframe. That is the only
+ * way to name devices before joining: with no permission yet,
+ * enumerateDevices() returns entries whose label AND deviceId are both empty
+ * strings, so a picker built from it can neither label nor select anything.
+ * Calling getUserMedia is what unlocks both.
+ *
+ * The stream is released in full before the iframe mounts. Chrome will in
+ * fact let the parent and the iframe hold the same camera at once, but
+ * holding it costs a second capture pipeline, and other browsers and some
+ * real hardware are far less relaxed about it than Chrome is.
+ * ===================================================================== */
+
+var media = {
+	stream: null,
+	hadPermission: false,
+	audioCtx: null,
+	analyser: null,
+	rafId: null,
+	acquiring: false,
+	devices: { cam: [], mic: [], spk: [] }
+};
+
+var SPEAKER_SELECTION_SUPPORTED =
+	typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+
+function stopPreview() {
+	if (media.rafId) { cancelAnimationFrame(media.rafId); media.rafId = null; }
+
+	if (media.audioCtx) {
+		try { media.audioCtx.close(); } catch (e) { /* already closed */ }
+		media.audioCtx = null;
+		media.analyser = null;
+	}
+
+	if (media.stream) {
+		media.stream.getTracks().forEach(function (t) { t.stop(); });
+		media.stream = null;
+	}
+
+	$("previewVideo").srcObject = null;
+	$("micMeterFill").style.width = "0%";
+}
+
+/* getUserMedia rejects with a handful of distinct errors and each one needs
+   different advice, so map them rather than showing one generic failure. */
+function describeMediaError(err) {
+	var name = (err && err.name) || "";
+
+	if (name === "NotAllowedError" || name === "SecurityError") {
+		return {
+			kind: "denied",
+			title: "Camera and microphone are blocked",
+			body: "Allow access in your browser's address bar, then try again. You can also join without them.",
+			retry: true
+		};
+	}
+	if (name === "NotFoundError" || name === "OverconstrainedError") {
+		return {
+			kind: "notfound",
+			title: "No camera or microphone found",
+			body: "Connect a device and try again, or join without one.",
+			retry: true
+		};
+	}
+	if (name === "NotReadableError" || name === "AbortError") {
+		return {
+			kind: "inuse",
+			title: "Your camera is in use",
+			body: "Another app may have it open. Close that app, then try again.",
+			retry: true
+		};
+	}
+	return {
+		kind: "error",
+		title: "Could not start your camera",
+		body: (err && err.message) ? err.message : "Something went wrong reaching your devices.",
+		retry: true
+	};
+}
+
+function showPreviewStatus(info) {
+	var stage = $("previewStage");
+	var box = $("previewStatus");
+
+	if (!info) {
+		stage.classList.remove("status");
+		box.classList.add("hidden");
+		return;
+	}
+
+	stage.classList.add("status");
+	box.classList.remove("hidden");
+	box.classList.toggle("no-retry", !info.retry);
+	box.querySelector(".status-icon").innerHTML = svg("warn");
+	$("previewStatusTitle").textContent = info.title;
+	$("previewStatusBody").textContent = info.body;
+}
+
+/* Acquire (or re-acquire) the preview stream for the current toggle and
+   device selection. Every device change re-runs this. */
+async function acquirePreview() {
+	if (media.acquiring) { return; }
+	media.acquiring = true;
+
+	stopPreview();
+
+	// Secure-context guard: getUserMedia simply does not exist on plain http
+	// beyond localhost, and the failure is otherwise baffling.
+	if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+		media.acquiring = false;
+		showPreviewStatus({
+			kind: "insecure",
+			title: "Camera needs a secure connection",
+			body: "Open this page over HTTPS (or on localhost) to use your camera and microphone.",
+			retry: false
+		});
+		return;
+	}
+
+	// The first successful call is what unlocks device labels, so ask for
+	// both tracks even if a toggle is off - otherwise a guest who saved
+	// "camera off" could never see their camera list.
+	var first = !media.hadPermission;
+	var wantVideo = first || state.cam;
+	var wantAudio = first || state.mic;
+
+	if (!wantVideo && !wantAudio) {
+		media.acquiring = false;
+		showPreviewStatus(null);
+		paintPreviewToggles();
+		return;
+	}
+
+	var constraints = {
+		video: wantVideo ? deviceConstraint(state.camId) : false,
+		audio: wantAudio ? deviceConstraint(state.micId) : false
+	};
+
+	try {
+		media.stream = await navigator.mediaDevices.getUserMedia(constraints);
+		media.hadPermission = true;
+		showPreviewStatus(null);
+	} catch (err) {
+		media.acquiring = false;
+
+		// An exact deviceId that no longer exists (unplugged between loads)
+		// throws OverconstrainedError. Drop the pin and retry once on default.
+		if (err && err.name === "OverconstrainedError" && (state.camId || state.micId)) {
+			state.camId = null;
+			state.micId = null;
+			return acquirePreview();
+		}
+
+		showPreviewStatus(describeMediaError(err));
+		await refreshDeviceLists();
+		return;
+	}
+
+	media.acquiring = false;
+
+	// Honour toggles that we overrode for the first permission-unlocking call.
+	if (first) {
+		if (!state.cam) { dropTracks("video"); }
+		if (!state.mic) { dropTracks("audio"); }
+	}
+
+	$("previewVideo").srcObject = media.stream;
+	startMeter();
+	await refreshDeviceLists();
+	paintPreviewToggles();
+}
+
+function deviceConstraint(deviceId) {
+	return deviceId ? { deviceId: { exact: deviceId } } : true;
+}
+
+function dropTracks(kind) {
+	if (!media.stream) { return; }
+	media.stream.getTracks().forEach(function (t) {
+		if (t.kind === kind) { t.stop(); media.stream.removeTrack(t); }
+	});
+}
+
+/* --- device lists ------------------------------------------------------- */
+
+async function refreshDeviceLists() {
+	var all = [];
+	try {
+		all = await navigator.mediaDevices.enumerateDevices();
+	} catch (e) {
+		return;
+	}
+
+	media.devices.cam = all.filter(function (d) { return d.kind === "videoinput"; });
+	media.devices.mic = all.filter(function (d) { return d.kind === "audioinput"; });
+	media.devices.spk = all.filter(function (d) { return d.kind === "audiooutput"; });
+
+	// Track what is actually live, so the selects reflect reality rather than
+	// what we asked for - the browser may have handed us a different device.
+	var vt = media.stream && media.stream.getVideoTracks()[0];
+	var at = media.stream && media.stream.getAudioTracks()[0];
+	if (vt && vt.getSettings) { state.camId = vt.getSettings().deviceId || state.camId; }
+	if (at && at.getSettings) { state.micId = at.getSettings().deviceId || state.micId; }
+
+	fillSelect($("camSelect"), media.devices.cam, state.camId, "Camera");
+	fillSelect($("micSelect"), media.devices.mic, state.micId, "Microphone");
+
+	if (SPEAKER_SELECTION_SUPPORTED) {
+		fillSelect($("spkSelect"), media.devices.spk, state.spkId, "Speaker");
+	} else {
+		// Firefox and iOS Safari have no setSinkId; the browser follows the
+		// system default and a picker here would be a lie.
+		$("spkRow").classList.add("hidden");
+		document.querySelector(".device-row").classList.add("no-speaker");
+	}
+}
+
+function fillSelect(sel, list, chosenId, fallbackLabel) {
+	sel.textContent = "";
+
+	if (!list.length) {
+		var none = document.createElement("option");
+		none.textContent = "No " + fallbackLabel.toLowerCase() + " found";
+		sel.appendChild(none);
+		sel.disabled = true;
+		return;
+	}
+
+	sel.disabled = false;
+	var seen = false;
+
+	list.forEach(function (d, i) {
+		var o = document.createElement("option");
+		o.value = d.deviceId;
+		// Labels stay empty until permission is granted; number them so the
+		// control is at least usable in that state.
+		o.textContent = d.label || (fallbackLabel + " " + (i + 1));
+		if (d.deviceId && d.deviceId === chosenId) { o.selected = true; seen = true; }
+		sel.appendChild(o);
+	});
+
+	if (!seen && sel.options.length) { sel.selectedIndex = 0; }
+}
+
+function labelOf(kind, deviceId) {
+	var list = media.devices[kind] || [];
+	for (var i = 0; i < list.length; i++) {
+		if (list[i].deviceId === deviceId) { return list[i].label || ""; }
+	}
+	return "";
+}
+
+/* --- mic level ---------------------------------------------------------- */
+
+function startMeter() {
+	var track = media.stream && media.stream.getAudioTracks()[0];
+	if (!track) { $("previewStage").classList.add("no-audio"); return; }
+	$("previewStage").classList.remove("no-audio");
+
+	var Ctx = window.AudioContext || window.webkitAudioContext;
+	if (!Ctx) { return; }
+
+	try {
+		media.audioCtx = new Ctx();
+		var src = media.audioCtx.createMediaStreamSource(media.stream);
+		media.analyser = media.audioCtx.createAnalyser();
+		media.analyser.fftSize = 512;
+		src.connect(media.analyser);
+	} catch (e) {
+		return;
+	}
+
+	var buf = new Uint8Array(media.analyser.fftSize);
+	var fill = $("micMeterFill");
+	var smoothed = 0;
+
+	(function tick() {
+		if (!media.analyser) { return; }
+		media.analyser.getByteTimeDomainData(buf);
+
+		// RMS around the 128 midpoint of the unsigned byte waveform.
+		var sum = 0;
+		for (var i = 0; i < buf.length; i++) {
+			var v = (buf[i] - 128) / 128;
+			sum += v * v;
+		}
+		var rms = Math.sqrt(sum / buf.length);
+
+		// Scale up: normal speech sits well under 0.2 RMS.
+		var pct = Math.min(100, rms * 320);
+		smoothed = pct > smoothed ? pct : smoothed * 0.82 + pct * 0.18;
+		fill.style.width = smoothed.toFixed(1) + "%";
+
+		media.rafId = requestAnimationFrame(tick);
+	})();
+}
+
+/* =========================================================================
+ * prejoin ui
+ * ===================================================================== */
+
+function paintPreviewToggles() {
+	var camOn = state.cam;
+	var micOn = state.mic;
+
+	var mb = $("preMic");
+	mb.setAttribute("aria-pressed", String(micOn));
+	mb.title = micOn ? "Turn off microphone" : "Turn on microphone";
+	setIcon(mb, micOn ? "mic" : "micOff");
+
+	var cb = $("preCam");
+	cb.setAttribute("aria-pressed", String(camOn));
+	cb.title = camOn ? "Turn off camera" : "Turn on camera";
+	setIcon(cb, camOn ? "cam" : "camOff");
+
+	$("previewStage").classList.toggle("no-video", !camOn);
+	$("previewStage").classList.toggle("no-audio", !micOn);
+	$("previewPlaceholderText").textContent = micOn ? "Camera is off" : "Camera and microphone are off";
+	updatePreviewInitials();
+}
+
+function updatePreviewInitials() {
+	var n = ($("nameInput").value || "").trim();
+	$("previewInitials").textContent = n ? initials(n) : "?";
+}
+
+function join() {
+	var room = sanitizeRoom($("roomInput").value);
+	if (!room) {
+		var f = $("roomInput");
+		f.classList.remove("shake");
+		void f.offsetWidth;
+		f.classList.add("shake");
+		f.focus();
+		return;
+	}
+
+	state.room = room;
+	state.password = $("passInput").value.trim();
+	state.name = $("nameInput").value.trim().slice(0, 40);
+
+	// Resolve labels while the device list is still populated, since
+	// buildSrc() needs them and stopPreview() is about to run.
+	var prefs = {
+		name: state.name,
+		cam: labelOf("cam", state.camId),
+		mic: labelOf("mic", state.micId),
+		spk: labelOf("spk", state.spkId),
+		micOn: state.mic,
+		camOn: state.cam
+	};
+
+	try {
+		localStorage.setItem("call.name", state.name);
+		// Store labels rather than ids: deviceIds are origin-scoped and rotate
+		// when site data is cleared, so they would not survive to a later visit.
+		localStorage.setItem("call.devices", JSON.stringify(prefs));
+	} catch (e) { /* private mode - not worth surfacing */ }
+
+	$("joinBtn").disabled = true;
+	$("roomLabel").textContent = room;
+	document.title = room + " - Call";
+
+	var src = buildSrc();   // reads the device labels
+	stopPreview();          // release the camera before the iframe asks for it
+
+	$("prejoin").classList.add("hidden");
+	$("app").classList.add("live");
+
+	setMic(state.mic, true);
+	setCam(state.cam, true);
+	renderPeople();
+	mountIframe(src);
+
+	// The roster has no leave event to listen for, so poll. 4s is frequent
+	// enough that the count feels live and cheap enough to ignore - it is a
+	// same-origin postMessage round trip.
+	pollTimer = setInterval(refreshPeers, 4000);
+}
+
+/* =========================================================================
+ * wiring
+ * ===================================================================== */
+
+(function init() {
+	// icons
+	setIcon($("btnMic"), "mic");
+	setIcon($("btnCam"), "cam");
+	setIcon($("btnShare"), "share");
+	setIcon($("btnHand"), "hand");
+	setIcon($("btnChat"), "chat");
+	setIcon($("btnPeople"), "people");
+	setIcon($("btnSettings"), "gear");
+	setIcon($("btnLeave"), "leave");
+	setIcon($("copyLink"), "copy");
+	setIcon($("peopleCount"), "people");
+
+	setIcon($("micMeter"), "mic");
+	$("camSelect").parentElement.querySelector(".ico").innerHTML = svg("cam");
+	$("micSelect").parentElement.querySelector(".ico").innerHTML = svg("mic");
+	$("spkSelect").parentElement.querySelector(".ico").innerHTML = svg("speaker");
+
+	// prefill from the URL and last session
+	var qs = new URLSearchParams(window.location.search);
+	if (qs.get("room")) { $("roomInput").value = sanitizeRoom(qs.get("room")); }
+	if (qs.get("password")) { $("passInput").value = qs.get("password"); }
+
+	var savedName = qs.get("name");
+	var savedDevices = null;
+	try {
+		savedDevices = JSON.parse(localStorage.getItem("call.devices") || "null");
+		if (!savedName) { savedName = localStorage.getItem("call.name"); }
+	} catch (e) { savedDevices = null; }
+
+	if (savedName) { $("nameInput").value = savedName; }
+
+	if (savedDevices) {
+		if (savedDevices.micOn === false) { state.mic = false; }
+		if (savedDevices.camOn === false) { state.cam = false; }
+	}
+
+	paintPreviewToggles();
+
+	if (!$("roomInput").value) {
+		$("roomInput").focus();
+	} else if (!$("nameInput").value) {
+		$("nameInput").focus();
+	}
+
+	// prejoin
+	$("randomRoom").addEventListener("click", function () {
+		$("roomInput").value = randomName();
+	});
+
+	$("nameInput").addEventListener("input", updatePreviewInitials);
+
+	$("preMic").addEventListener("click", function () {
+		state.mic = !state.mic;
+		paintPreviewToggles();
+		acquirePreview();
+	});
+
+	$("preCam").addEventListener("click", function () {
+		state.cam = !state.cam;
+		paintPreviewToggles();
+		acquirePreview();
+	});
+
+	$("camSelect").addEventListener("change", function () {
+		state.camId = this.value;
+		acquirePreview();
+	});
+
+	$("micSelect").addEventListener("change", function () {
+		state.micId = this.value;
+		acquirePreview();
+	});
+
+	$("spkSelect").addEventListener("change", function () {
+		state.spkId = this.value;
+	});
+
+	$("previewRetry").addEventListener("click", function () {
+		// A denial can be cleared from the address bar without reloading, so
+		// retrying in place is worth offering before suggesting a refresh.
+		media.hadPermission = false;
+		acquirePreview();
+	});
+
+	// Plugging in a headset mid-prejoin should show up straight away.
+	if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+		navigator.mediaDevices.addEventListener("devicechange", function () {
+			if (!state.room) { refreshDeviceLists(); }
+		});
+	}
+
+	// Restore the previously used devices by label, then start the preview.
+	// Labels are only readable after permission, so this runs as a follow-up
+	// once acquirePreview() has populated the lists.
+	acquirePreview().then(function () {
+		if (!savedDevices) { return; }
+		var changed = false;
+
+		[["cam", "camId", "camSelect"], ["mic", "micId", "micSelect"], ["spk", "spkId", "spkSelect"]]
+			.forEach(function (row) {
+				var want = savedDevices[row[0]];
+				if (!want) { return; }
+				var hit = media.devices[row[0]].filter(function (d) { return d.label === want; })[0];
+				if (hit && hit.deviceId !== state[row[1]]) {
+					state[row[1]] = hit.deviceId;
+					$(row[2]).value = hit.deviceId;
+					if (row[0] !== "spk") { changed = true; }
+				}
+			});
+
+		if (changed) { acquirePreview(); }
+	});
+
+	$("joinBtn").addEventListener("click", join);
+
+	["roomInput", "nameInput", "passInput"].forEach(function (id) {
+		$(id).addEventListener("keydown", function (e) {
+			if (e.key === "Enter") { e.preventDefault(); join(); }
+		});
+	});
+
+	// controls
+	$("btnMic").addEventListener("click", function () { setMic(!state.mic, false); });
+	$("btnCam").addEventListener("click", function () { setCam(!state.cam, false); });
+	$("btnShare").addEventListener("click", function () { setShare(!state.sharing, false); });
+	$("btnHand").addEventListener("click", function () { setHand(!state.hand, false); });
+	$("btnChat").addEventListener("click", function () { openDrawer("chat"); });
+	$("btnPeople").addEventListener("click", function () { openDrawer("people"); });
+	$("btnSettings").addEventListener("click", function () { send({ toggleSettings: "toggle" }); });
+	$("btnLeave").addEventListener("click", leave);
+	$("copyLink").addEventListener("click", copyInvite);
+
+	// drawer tabs
+	$("tabChat").addEventListener("click", function () {
+		if (state.drawer !== "chat") { openDrawer("chat"); }
+	});
+	$("tabPeople").addEventListener("click", function () {
+		if (state.drawer !== "people") { openDrawer("people"); }
+	});
+
+	// chat
+	$("chatForm").addEventListener("submit", function (e) {
+		e.preventDefault();
+		var input = $("chatInput");
+		var msg = input.value.trim();
+		if (!msg) { return; }
+		send({ sendChat: msg });
+		addMessage(state.name || "You", msg, true);
+		input.value = "";
+	});
+
+	// Ctrl/Cmd+D and Ctrl/Cmd+E, the shortcuts Meet uses. Skipped while typing
+	// so they never eat a keystroke meant for the chat box.
+	document.addEventListener("keydown", function (e) {
+		if (!state.room) { return; }
+
+		var tag = (e.target && e.target.tagName) || "";
+		if (tag === "INPUT" || tag === "TEXTAREA") { return; }
+
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+			e.preventDefault();
+			setMic(!state.mic, false);
+		} else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+			e.preventDefault();
+			setCam(!state.cam, false);
+		}
+	});
+
+	window.addEventListener("beforeunload", function () {
+		if (state.room) { send({ hangup: true }); }
+	});
+})();
+</script>
+</body>
+</html>
