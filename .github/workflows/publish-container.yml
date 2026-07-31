@@ -182,4 +182,8 @@ jobs:
             || { echo "FAIL: wrong error for privileged port"; cat /tmp/bad; exit 1; }
           echo "ok   privileged port rejected with a clear message"
 
-          docker rm -f vdo-smoke
+          # No cleanup needed: vdo-default and vdo-custom are removed above and
+          # the privileged-port container ran with --rm. There is deliberately
+          # no `docker rm -f vdo-smoke` here - no such container is ever
+          # created (vdo-ninja:smoke is the image tag), and as the last command
+          # in the step its exit code decided the whole job's result.
