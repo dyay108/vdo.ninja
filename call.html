@@ -877,7 +877,7 @@ button.chip:hover { background: var(--surface-3); color: var(--text); }
 		<button type="button" class="ctrl accent-on" id="btnHand" aria-pressed="false" title="Raise hand" aria-label="Raise hand"><span class="ico"></span></button>
 		<button type="button" class="ctrl accent-on" id="btnChat" aria-pressed="false" title="Chat" aria-label="Toggle chat"><span class="ico"></span><span class="badge" id="chatBadge">0</span></button>
 		<button type="button" class="ctrl accent-on" id="btnPeople" aria-pressed="false" title="People" aria-label="Toggle people list"><span class="ico"></span></button>
-		<button type="button" class="ctrl" id="btnSettings" title="Camera and mic settings" aria-label="Settings"><span class="ico"></span></button>
+		<button type="button" class="ctrl accent-on" id="btnSettings" aria-pressed="false" title="Camera and mic settings" aria-label="Settings"><span class="ico"></span></button>
 		<button type="button" class="ctrl leave" id="btnLeave" title="Leave the call" aria-label="Leave call"><span class="ico"></span></button>
 	</footer>
 </div>
@@ -940,6 +940,9 @@ var state = {
 	spkId: null,
 	sharing: false,
 	hand: false,
+	// Whether the guest asked for the settings panel, as opposed to upstream
+	// force-opening it. See the settings-menu-state handler.
+	settingsWanted: false,
 	drawer: null,      // null | "chat" | "people"
 	unread: 0,
 	peers: {},         // UUID -> { label, streamID }
@@ -1075,6 +1078,20 @@ function handleAction(d) {
 
 		case "screen-share-state":
 			setShare(!!d.value, true);
+			break;
+
+		case "settings-menu-state":
+			// CSS already keeps an unrequested panel invisible; this puts the
+			// core's own state back in sync so the next gear click is not
+			// inverted by a phantom "open".
+			var open = !!d.value;
+			if (open && !state.settingsWanted) {
+				send({ toggleSettings: false });
+				break;
+			}
+			state.settingsWanted = open;
+			if (!open) { allowSettingsPanel(false); }
+			paintSettingsButton();
 			break;
 
 		case "hand":
@@ -1299,6 +1316,30 @@ function setShare(on, fromCore) {
 	b.setAttribute("aria-pressed", String(on));
 	b.title = on ? "Stop presenting" : "Present your screen";
 	if (!fromCore) { command("togglescreenshare"); }
+}
+
+function paintSettingsButton() {
+	var b = $("btnSettings");
+	b.setAttribute("aria-pressed", String(state.settingsWanted));
+	b.title = state.settingsWanted ? "Close settings" : "Camera and mic settings";
+}
+
+/* Gate for the CSS rule in call-theme.css that hides an unrequested settings
+ * panel. The iframe is same-origin, so reach into its document directly; the
+ * eval fallback only matters if it is ever served from another origin. */
+function allowSettingsPanel(on) {
+	try {
+		var doc = iframe && iframe.contentDocument;
+		if (doc && doc.documentElement) {
+			doc.documentElement.classList.toggle("wrapper-settings-ok", on);
+			return;
+		}
+	} catch (e) { /* cross-origin - fall through */ }
+
+	send({
+		function: "eval",
+		value: 'document.documentElement.classList.' + (on ? "add" : "remove") + '("wrapper-settings-ok")'
+	});
 }
 
 function setHand(on, fromCore) {
@@ -1927,7 +1968,15 @@ function join() {
 	$("btnHand").addEventListener("click", function () { setHand(!state.hand, false); });
 	$("btnChat").addEventListener("click", function () { openDrawer("chat"); });
 	$("btnPeople").addEventListener("click", function () { openDrawer("people"); });
-	$("btnSettings").addEventListener("click", function () { send({ toggleSettings: "toggle" }); });
+	$("btnSettings").addEventListener("click", function () {
+		state.settingsWanted = !state.settingsWanted;
+		paintSettingsButton();
+		// Un-gate before opening, or the CSS would suppress the panel we just
+		// asked for. On close the gate is dropped by the settings-menu-state
+		// handler, once the core confirms it actually shut.
+		if (state.settingsWanted) { allowSettingsPanel(true); }
+		send({ toggleSettings: "toggle" });
+	});
 	$("btnLeave").addEventListener("click", leave);
 	$("copyLink").addEventListener("click", copyInvite);
 

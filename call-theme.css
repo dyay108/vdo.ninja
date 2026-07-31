@@ -61,6 +61,22 @@ body {
 	display: none !important;
 }
 
+/* The settings panel is kept, but only shows when the wrapper says so.
+ *
+ * Ending a screenshare force-opens it (lib.js:36912, `toggleSettings(true)`),
+ * which in stock VDO.Ninja is how you re-pick a camera afterwards. Here it
+ * throws a foreign panel over the call unasked.
+ *
+ * Reacting to the settings-menu-state event is too late to prevent it:
+ * showSettings() is async, so the event only fires once the panel is already
+ * painted - about 200ms of visible flash. Suppressing it in CSS avoids the
+ * race entirely. call.html adds .wrapper-settings-ok to <html> before opening
+ * the panel deliberately, so this rule only ever hides an unrequested one,
+ * and VDO.Ninja's own show/hide logic is left untouched. */
+html:not(.wrapper-settings-ok) #popupSelector {
+	display: none !important;
+}
+
 /* --- grid --------------------------------------------------------------- */
 
 #gridlayout {
