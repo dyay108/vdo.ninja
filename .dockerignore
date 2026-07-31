@@ -1,0 +1,29 @@
+# Keep the build context to just the files that get served.
+#
+# Note: docker/ is NOT excluded, because the Dockerfile copies the nginx
+# config out of it. It is removed inside the build instead.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+.github
+
+# Tooling / editor
+.vscode
+.claude
+.prettierrc
+node_modules
+package-lock.json
+
+# Container build files - not part of the site
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+DOCKER.md
+
+# Optional: uncomment to drop the virtual-background model weights and save
+# ~120 MB of image size. Only do this if you never use the &effects
+# background blur/replacement features - the rest of the app is unaffected.
+# thirdparty/longpipe/models

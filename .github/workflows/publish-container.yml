@@ -1,0 +1,118 @@
+name: Publish container image
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - "v*"
+    # No path filter on purpose: nearly every file in the repo is served by
+    # the image, including the .md docs, so any push to develop is a real
+    # content change. Layer caching keeps the rebuild cheap.
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - ".github/workflows/publish-container.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Pull requests build to verify the Dockerfile still works, but never
+      # push. Fork PRs are not granted packages:write in any case.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=short,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Cheap smoke test so a broken nginx config cannot ship silently. Loads
+      # the amd64 image on the runner and exercises the routes that the config
+      # actually changes.
+      - name: Smoke test the built image
+        run: |
+          set -euo pipefail
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha -t vdo-ninja:smoke .
+          docker run -d --name vdo-smoke -p 18080:8080 vdo-ninja:smoke
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then break; fi
+            if [ "$i" = "30" ]; then echo "container never became healthy"; docker logs vdo-smoke; exit 1; fi
+            sleep 1
+          done
+
+          check() {
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080$1")
+            if [ "$code" != "$2" ]; then
+              echo "FAIL $1 -> $code (expected $2)"; docker logs vdo-smoke; exit 1
+            fi
+            echo "ok   $1 -> $code"
+          }
+
+          check /            200
+          check /healthz     200
+          check /mixer       200
+          check /obs/simple  200
+          check /main.js     200
+          check /mixer.html  302
+
+          # gzip_static must serve the prebuilt .gz sibling
+          curl -s -o /dev/null -H 'Accept-Encoding: gzip' -D /tmp/h http://127.0.0.1:18080/lib.js
+          grep -qi '^content-encoding: gzip' /tmp/h || { echo "FAIL lib.js not gzipped"; docker logs vdo-smoke; exit 1; }
+          echo "ok   /lib.js served gzipped"
+
+          docker rm -f vdo-smoke

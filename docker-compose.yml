@@ -1,0 +1,52 @@
+services:
+  vdo-ninja:
+    # Prebuilt multi-arch image (amd64 + arm64) published by
+    # .github/workflows/publish-container.yml on every push to develop.
+    # Pin to a specific build with :sha-<short> if you want rollbacks.
+    image: ghcr.io/dyay108/vdo.ninja:latest
+
+    # To build from source on this machine instead, comment out `image:` above
+    # and uncomment this. Expect a slow first build - the context is ~242 MB.
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+
+    container_name: vdo-ninja
+    restart: unless-stopped
+
+    # Plain HTTP. Your reverse proxy terminates TLS in front of this.
+    # VDO.Ninja will not get camera/mic access over plain http:// from
+    # anything but localhost, so this port is not meant to be used directly.
+    ports:
+      - "8080:8080"
+
+    # The image is static content only; nothing needs to write to disk.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # --- Traefik ------------------------------------------------------------
+    # If you run Traefik, drop the `ports:` block above, uncomment these
+    # labels and the `networks:` blocks below, and set your hostname.
+    #
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.vdo.rule=Host(`vdo.example.com`)"
+    #   - "traefik.http.routers.vdo.entrypoints=websecure"
+    #   - "traefik.http.routers.vdo.tls.certresolver=letsencrypt"
+    #   - "traefik.http.services.vdo.loadbalancer.server.port=8080"
+    # networks:
+    #   - proxy
+
+# networks:
+#   proxy:
+#     external: true
